@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PIL import Image
@@ -32,7 +33,12 @@ class VisualEncoder:
             ) from exc
 
         self._torch = torch
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            self._device = "cuda"
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            self._device = "mps"
+        else:
+            self._device = "cpu"
 
         self._siglip_processor = AutoProcessor.from_pretrained(self.settings.siglip_model_id)
         self._siglip = AutoModel.from_pretrained(self.settings.siglip_model_id).to(self._device)
@@ -73,15 +79,15 @@ class VisualEncoder:
         torch = self._torch
 
         with torch.no_grad():
-            siglip_inputs = self._siglip_processor(images=image, return_tensors="pt").to(
-                self._device
-            )
+            siglip_inputs = self._siglip_processor(images=image, return_tensors="pt")
+            siglip_inputs = {k: v.to(self._device) for k, v in siglip_inputs.items()}
             siglip_out = self._siglip.get_image_features(**siglip_inputs)
-            siglip_vec = torch.nn.functional.normalize(siglip_out, dim=-1)[0].cpu().tolist()
+            siglip_vec = self._to_unit_vector(siglip_out)
 
-            beit_inputs = self._beit_processor(images=image, return_tensors="pt").to(self._device)
-            beit_out = self._beit(**beit_inputs).last_hidden_state[:, 0]
-            beit_vec = torch.nn.functional.normalize(beit_out, dim=-1)[0].cpu().tolist()
+            beit_inputs = self._beit_processor(images=image, return_tensors="pt")
+            beit_inputs = {k: v.to(self._device) for k, v in beit_inputs.items()}
+            beit_out = self._beit(**beit_inputs)
+            beit_vec = self._to_unit_vector(beit_out)
 
         return siglip_vec, beit_vec
 
@@ -92,9 +98,34 @@ class VisualEncoder:
                 text=[text],
                 padding="max_length",
                 return_tensors="pt",
-            ).to(self._device)
+            )
+            inputs = {k: v.to(self._device) for k, v in inputs.items()}
             feats = self._siglip.get_text_features(**inputs)
-            return torch.nn.functional.normalize(feats, dim=-1)[0].cpu().tolist()
+            return self._to_unit_vector(feats)
+
+    def _to_unit_vector(self, features: Any) -> list[float]:
+        """Normalize image/text features whether they are a tensor or ModelOutput."""
+        torch = self._torch
+        tensor = self._as_embedding_tensor(features)
+        vec = torch.nn.functional.normalize(tensor, dim=-1)[0]
+        return vec.detach().cpu().tolist()
+
+    def _as_embedding_tensor(self, features: Any):
+        """Newer transformers may return BaseModelOutputWithPooling instead of a Tensor."""
+        torch = self._torch
+        if torch.is_tensor(features):
+            tensor = features
+        elif hasattr(features, "pooler_output") and features.pooler_output is not None:
+            tensor = features.pooler_output
+        elif hasattr(features, "last_hidden_state") and features.last_hidden_state is not None:
+            # CLS / first token fallback (BEiT-style).
+            tensor = features.last_hidden_state[:, 0]
+        else:
+            raise TypeError(f"Unsupported feature type: {type(features)!r}")
+
+        if tensor.ndim == 1:
+            tensor = tensor.unsqueeze(0)
+        return tensor
 
     @staticmethod
     def _hash_embed(seed: str, dim: int) -> list[float]:
