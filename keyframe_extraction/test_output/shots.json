@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "source_video": "/Users/phamngocgiabao/AIChallenge2026/keyframe_extraction/test_data/sample.mp4",
+  "video": {
+    "fps": 25.0,
+    "frame_count": 225,
+    "width": 640,
+    "height": 360,
+    "duration_seconds": 9.0
+  },
+  "detector": {
+    "name": "TransNetV2",
+    "threshold": 0.5
+  },
+  "shot_count": 3,
+  "shots": [
+    {
+      "shot_id": 1,
+      "start_frame": 0,
+      "middle_frame": 37,
+      "end_frame": 74,
+      "start_time_seconds": 0.0,
+      "middle_time_seconds": 1.48,
+      "end_time_seconds": 2.96,
+      "keyframes": {
+        "start": "shot_001_start.jpg",
+        "middle": "shot_001_middle.jpg",
+        "end": "shot_001_end.jpg"
+      }
+    },
+    {
+      "shot_id": 2,
+      "start_frame": 75,
+      "middle_frame": 112,
+      "end_frame": 149,
+      "start_time_seconds": 3.0,
+      "middle_time_seconds": 4.48,
+      "end_time_seconds": 5.96,
+      "keyframes": {
+        "start": "shot_002_start.jpg",
+        "middle": "shot_002_middle.jpg",
+        "end": "shot_002_end.jpg"
+      }
+    },
+    {
+      "shot_id": 3,
+      "start_frame": 150,
+      "middle_frame": 187,
+      "end_frame": 224,
+      "start_time_seconds": 6.0,
+      "middle_time_seconds": 7.48,
+      "end_time_seconds": 8.96,
+      "keyframes": {
+        "start": "shot_003_start.jpg",
+        "middle": "shot_003_middle.jpg",
+        "end": "shot_003_end.jpg"
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# Official TensorFlow inference package and pretrained weights, pinned to a full commit.
+transnetv2 @ git+https://github.com/soCzech/TransNetV2.git@85cef72af9a916bdfd7cc94a670c9cdfbf12d1ed
+
+# TransNet V2 intentionally leaves these runtime dependencies to the application.
+tensorflow==2.15.1
+numpy==1.26.4
+ffmpeg-python==0.2.0
+Pillow==10.4.0
+opencv-python==4.10.0.84
