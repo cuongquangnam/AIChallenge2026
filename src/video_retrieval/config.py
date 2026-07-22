@@ -27,6 +27,9 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
+    gemini_rpm: int = 5
+    gemini_max_retries: int = 5
+    gemini_batch_size: int = 10
     whisper_model: str = "base"
     siglip_model_id: str = "google/siglip-base-patch16-224"
     beit3_model_id: str = "microsoft/beit-base-patch16-224"
