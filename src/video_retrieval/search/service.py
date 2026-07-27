@@ -27,15 +27,32 @@ class SearchService:
         hits = self.es.search(query, limit=limit)
         return SearchResponse(query=query, mode="text", hits=hits)
 
+    def search_text_filtered(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        source: str | None = None,
+        video_id: str | None = None,
+    ) -> SearchResponse:
+        hits = self.es.search(query, limit=limit, source=source, video_id=video_id)
+        mode = "text"
+        if source:
+            mode = f"text:{source}"
+        return SearchResponse(query=query, mode=mode, hits=hits)
+
     def search_visual_text(
         self,
         query: str,
         *,
         limit: int = 10,
         vector_name: str = "siglip",
+        video_id: str | None = None,
     ) -> SearchResponse:
+        if vector_name != "siglip":
+            raise ValueError("Text-to-visual search only supports the SigLIP text embedding space")
         vector = self.visual.encode_text(query)
-        hits = self.qdrant.search(vector, vector_name=vector_name, limit=limit)
+        hits = self.qdrant.search(vector, vector_name=vector_name, limit=limit, video_id=video_id)
         return SearchResponse(query=query, mode=f"visual_text:{vector_name}", hits=hits)
 
     def search_image(
@@ -60,24 +77,71 @@ class SearchService:
         merged = _rrf_fuse([text_hits, visual_hits], limit=limit)
         return SearchResponse(query=query, mode="hybrid", hits=merged)
 
+    def search_hybrid_filtered(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        source: str | None = None,
+        video_id: str | None = None,
+    ) -> SearchResponse:
+        text_hits = self.es.search(query, limit=limit, source=source, video_id=video_id)
+        visual_hits = self.qdrant.search(
+            self.visual.encode_text(query),
+            vector_name="siglip",
+            limit=limit,
+            video_id=video_id,
+        )
+        merged = _rrf_fuse([text_hits, visual_hits], limit=limit)
+        return SearchResponse(query=query, mode="hybrid", hits=merged)
+
 
 def _rrf_fuse(rankings: list[list[SearchHit]], *, limit: int, k: int = 60) -> list[SearchHit]:
     scores: dict[str, float] = {}
     best: dict[str, SearchHit] = {}
+    evidence: dict[str, list[dict[str, object]]] = {}
 
     for ranking in rankings:
         for rank, hit in enumerate(ranking):
-            key = (
-                f"{hit.video_id}|{hit.shot_index}|{hit.frame_index}|{hit.source}|{hit.text or ''}"
-            )
+            key = _fusion_key(hit)
             scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
             if key not in best or hit.score > best[key].score:
                 best[key] = hit
+            evidence.setdefault(key, []).append(_hit_evidence(hit))
 
     ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]
     fused: list[SearchHit] = []
     for key, score in ordered:
         hit = best[key].model_copy()
         hit.score = score
+        hit.source = "hybrid"
+        hit.payload = {**hit.payload, "evidence": evidence.get(key, [])}
+        for item in evidence.get(key, []):
+            if hit.text is None and item.get("text"):
+                hit.text = str(item["text"])
+            if hit.keyframe_path is None and item.get("keyframe_path"):
+                hit.keyframe_path = str(item["keyframe_path"])
+            if hit.timestamp_sec is None and item.get("timestamp_sec") is not None:
+                hit.timestamp_sec = float(item["timestamp_sec"])
         fused.append(hit)
     return fused
+
+
+def _fusion_key(hit: SearchHit) -> str:
+    if hit.shot_index is not None:
+        return f"{hit.video_id}|shot:{hit.shot_index}"
+    if hit.timestamp_sec is not None:
+        return f"{hit.video_id}|time:{hit.timestamp_sec:.1f}|{hit.source}"
+    return f"{hit.video_id}|doc:{hit.source}|{hit.text or hit.keyframe_path or ''}"
+
+
+def _hit_evidence(hit: SearchHit) -> dict[str, object]:
+    return {
+        "source": hit.source,
+        "score": hit.score,
+        "shot_index": hit.shot_index,
+        "frame_index": hit.frame_index,
+        "timestamp_sec": hit.timestamp_sec,
+        "text": hit.text,
+        "keyframe_path": hit.keyframe_path,
+    }

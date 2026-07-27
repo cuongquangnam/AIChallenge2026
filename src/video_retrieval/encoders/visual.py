@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import hashlib
 
 import numpy as np
 from PIL import Image
@@ -129,7 +130,9 @@ class VisualEncoder:
 
     @staticmethod
     def _hash_embed(seed: str, dim: int) -> list[float]:
-        rng = np.random.default_rng(abs(hash(seed)) % (2**32))
+        digest = hashlib.sha256(seed.encode("utf-8")).digest()
+        rng_seed = int.from_bytes(digest[:8], byteorder="big", signed=False)
+        rng = np.random.default_rng(rng_seed)
         vec = rng.normal(size=dim).astype(np.float32)
         vec /= np.linalg.norm(vec) + 1e-8
         return vec.tolist()

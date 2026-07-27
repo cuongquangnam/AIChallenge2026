@@ -34,14 +34,23 @@ def search_cmd(
     query: str = typer.Argument(...),
     mode: str = typer.Option("hybrid", help="text | visual | hybrid"),
     limit: int = typer.Option(10),
+    source: Optional[str] = typer.Option(None, help="Filter text source: ocr | asr"),
+    video_id: Optional[str] = typer.Option(None, help="Filter to one video id"),
+    vector_name: str = typer.Option("siglip", help="Visual vector: siglip"),
 ) -> None:
     service = SearchService(get_settings())
     if mode == "text":
-        response = service.search_text(query, limit=limit)
+        response = service.search_text_filtered(
+            query, limit=limit, source=source, video_id=video_id
+        )
     elif mode == "visual":
-        response = service.search_visual_text(query, limit=limit)
+        response = service.search_visual_text(
+            query, limit=limit, vector_name=vector_name, video_id=video_id
+        )
     else:
-        response = service.search_hybrid(query, limit=limit)
+        response = service.search_hybrid_filtered(
+            query, limit=limit, source=source, video_id=video_id
+        )
     print(response)
 
 

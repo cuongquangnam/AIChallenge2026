@@ -65,6 +65,12 @@ def test_search_maps_hits(settings) -> None:
     assert hits[0].score == 2.5
     assert hits[0].source == "text:asr"
     assert hits[0].text == "spoken words"
+    body = client.search.call_args.kwargs["body"]
+    should = body["query"]["bool"]["must"][0]["bool"]["should"]
+    assert should[0]["match_phrase"]["text"]["boost"] == 4.0
+    assert should[1]["match"]["text"]["operator"] == "and"
+    assert should[3]["match"]["text"]["fuzziness"] == "AUTO"
+    assert body["query"]["bool"]["filter"] == [{"term": {"source": "asr"}}]
 
 
 @pytest.mark.unit
@@ -73,3 +79,18 @@ def test_index_documents_empty_short_circuits(settings) -> None:
     store = ElasticsearchStore(settings, client=client)
     assert store.index_documents([]) == 0
     client.bulk.assert_not_called()
+
+
+@pytest.mark.unit
+def test_search_empty_query_uses_match_all_with_filters(settings) -> None:
+    client = MagicMock()
+    client.indices.exists.return_value = True
+    client.search.return_value = {"hits": {"hits": []}}
+    store = ElasticsearchStore(settings, client=client)
+
+    hits = store.search(" ", limit=5, video_id="clip")
+
+    assert hits == []
+    body = client.search.call_args.kwargs["body"]
+    assert body["query"]["bool"]["must"] == [{"match_all": {}}]
+    assert body["query"]["bool"]["filter"] == [{"term": {"video_id": "clip"}}]

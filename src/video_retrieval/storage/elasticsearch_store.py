@@ -72,11 +72,52 @@ class ElasticsearchStore:
         if video_id:
             filters.append({"term": {"video_id": video_id}})
 
+        query = query.strip()
+        if query:
+            text_query: dict[str, Any] = {
+                "bool": {
+                    "should": [
+                        {"match_phrase": {"text": {"query": query, "boost": 4.0}}},
+                        {
+                            "match": {
+                                "text": {
+                                    "query": query,
+                                    "operator": "and",
+                                    "boost": 2.0,
+                                }
+                            }
+                        },
+                        {
+                            "match": {
+                                "text": {
+                                    "query": query,
+                                    "operator": "or",
+                                    "boost": 1.0,
+                                }
+                            }
+                        },
+                        {
+                            "match": {
+                                "text": {
+                                    "query": query,
+                                    "operator": "or",
+                                    "fuzziness": "AUTO",
+                                    "boost": 0.5,
+                                }
+                            }
+                        },
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        else:
+            text_query = {"match_all": {}}
+
         body: dict[str, Any] = {
             "size": limit,
             "query": {
                 "bool": {
-                    "must": [{"match": {"text": {"query": query, "operator": "and"}}}],
+                    "must": [text_query],
                     "filter": filters,
                 }
             },

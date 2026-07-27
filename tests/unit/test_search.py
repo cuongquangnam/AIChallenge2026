@@ -20,6 +20,34 @@ def test_rrf_fuse_prefers_items_present_in_both_lists() -> None:
 
 
 @pytest.mark.unit
+def test_rrf_fuse_merges_evidence_by_shot() -> None:
+    text = SearchHit(
+        video_id="v1",
+        score=2.0,
+        source="text:ocr",
+        shot_index=0,
+        frame_index=10,
+        text="sign text",
+    )
+    visual = SearchHit(
+        video_id="v1",
+        score=0.8,
+        source="visual:siglip",
+        shot_index=0,
+        frame_index=11,
+        keyframe_path="/tmp/shot.jpg",
+    )
+
+    fused = _rrf_fuse([[text], [visual]], limit=5)
+
+    assert len(fused) == 1
+    assert fused[0].source == "hybrid"
+    assert fused[0].text == "sign text"
+    assert fused[0].keyframe_path == "/tmp/shot.jpg"
+    assert len(fused[0].payload["evidence"]) == 2
+
+
+@pytest.mark.unit
 def test_search_service_modes(settings, qdrant_store: QdrantStore) -> None:
     fake_es = FakeElasticsearchStore()
     service = SearchService(settings, qdrant=qdrant_store, es=fake_es)  # type: ignore[arg-type]
@@ -31,6 +59,9 @@ def test_search_service_modes(settings, qdrant_store: QdrantStore) -> None:
     visual = service.search_visual_text("a cat", limit=5)
     assert visual.mode == "visual_text:siglip"
     assert visual.hits == []
+
+    with pytest.raises(ValueError, match="SigLIP"):
+        service.search_visual_text("a cat", limit=5, vector_name="beit3")
 
     hybrid = service.search_hybrid("hello", limit=5)
     assert hybrid.mode == "hybrid"

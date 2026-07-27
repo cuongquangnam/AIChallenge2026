@@ -30,6 +30,8 @@ class SearchRequest(BaseModel):
     mode: Literal["text", "visual", "hybrid"] = "hybrid"
     limit: int = Field(default=10, ge=1, le=100)
     vector_name: Literal["siglip", "beit3"] = "siglip"
+    source: Literal["ocr", "asr"] | None = None
+    video_id: str | None = None
 
 
 @app.get("/health")
@@ -63,12 +65,34 @@ async def index_upload(file: UploadFile = File(...), video_id: str | None = None
 @app.post("/search")
 def search(body: SearchRequest):
     service = SearchService(settings)
-    if body.mode == "text":
-        response = service.search_text(body.query, limit=body.limit)
-    elif body.mode == "visual":
-        response = service.search_visual_text(
-            body.query, limit=body.limit, vector_name=body.vector_name
-        )
-    else:
-        response = service.search_hybrid(body.query, limit=body.limit)
+    try:
+        if body.mode == "text":
+            if body.source or body.video_id:
+                response = service.search_text_filtered(
+                    body.query,
+                    limit=body.limit,
+                    source=body.source,
+                    video_id=body.video_id,
+                )
+            else:
+                response = service.search_text(body.query, limit=body.limit)
+        elif body.mode == "visual":
+            response = service.search_visual_text(
+                body.query,
+                limit=body.limit,
+                vector_name=body.vector_name,
+                video_id=body.video_id,
+            )
+        else:
+            if body.source or body.video_id:
+                response = service.search_hybrid_filtered(
+                    body.query,
+                    limit=body.limit,
+                    source=body.source,
+                    video_id=body.video_id,
+                )
+            else:
+                response = service.search_hybrid(body.query, limit=body.limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return response.model_dump(mode="json")
