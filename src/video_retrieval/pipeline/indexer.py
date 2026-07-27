@@ -8,7 +8,7 @@ from video_retrieval.config import Settings, get_settings
 from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.extraction.audio import extract_audio
 from video_retrieval.extraction.keyframes import extract_keyframes
-from video_retrieval.models import IndexResult, KeyFrame
+from video_retrieval.models import FrameRole, IndexResult, KeyFrame
 from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
 from video_retrieval.storage.qdrant_store import QdrantStore
 from video_retrieval.text.asr import ASREngine
@@ -98,3 +98,101 @@ class VideoIndexer:
             if path.suffix.lower() in exts:
                 results.append(self.index_video(path))
         return results
+
+    def index_keyframe_directory(
+        self,
+        directory: Path,
+        *,
+        limit: int | None = None,
+    ) -> list[IndexResult]:
+        """Visual-only index for pre-extracted AIC keyframe folders.
+
+        Expected layout:
+          directory/
+            L27_V001/
+              001.jpg
+              002.jpg
+            L27_V002/
+              ...
+        """
+        directory = Path(directory)
+        if not directory.exists():
+            raise FileNotFoundError(directory)
+        if not directory.is_dir():
+            raise NotADirectoryError(directory)
+
+        remaining = limit if limit is not None and limit > 0 else None
+        results: list[IndexResult] = []
+        image_exts = {".jpg", ".jpeg", ".png", ".webp"}
+
+        for video_dir in sorted(path for path in directory.iterdir() if path.is_dir()):
+            image_paths = [
+                path
+                for path in sorted(video_dir.iterdir())
+                if path.is_file() and path.suffix.lower() in image_exts
+            ]
+            if remaining is not None:
+                image_paths = image_paths[:remaining]
+            if not image_paths:
+                continue
+
+            keyframes = [
+                _keyframe_from_image_path(video_dir.name, path, shot_index)
+                for shot_index, path in enumerate(image_paths)
+            ]
+            embeddings = self.visual.encode_keyframes(keyframes)
+            n_visual = self.qdrant.upsert_embeddings(embeddings)
+            self._write_keyframe_manifest(video_dir.name, video_dir, keyframes, n_visual)
+
+            results.append(
+                IndexResult(
+                    video_id=video_dir.name,
+                    video_path=video_dir,
+                    num_shots=len(keyframes),
+                    num_keyframes=len(keyframes),
+                    num_visual_points=n_visual,
+                    num_text_docs=0,
+                    audio_path=None,
+                )
+            )
+
+            if remaining is not None:
+                remaining -= len(image_paths)
+                if remaining <= 0:
+                    break
+
+        return results
+
+    def _write_keyframe_manifest(
+        self,
+        video_id: str,
+        video_dir: Path,
+        keyframes: list[KeyFrame],
+        n_visual: int,
+    ) -> None:
+        manifest = {
+            "video_id": video_id,
+            "source": "preextracted_keyframes",
+            "video_path": str(video_dir),
+            "num_keyframes": len(keyframes),
+            "num_visual_points": n_visual,
+            "keyframes": [kf.model_dump(mode="json") for kf in keyframes],
+        }
+        manifest_path = self.settings.data_dir / "manifests" / f"{video_id}.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _keyframe_from_image_path(video_id: str, path: Path, shot_index: int) -> KeyFrame:
+    try:
+        frame_index = int(path.stem)
+    except ValueError:
+        frame_index = shot_index
+    return KeyFrame(
+        video_id=video_id,
+        shot_index=shot_index,
+        role=FrameRole.MIDDLE,
+        frame_index=frame_index,
+        timestamp_sec=0.0,
+        path=path,
+    )

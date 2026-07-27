@@ -8,6 +8,10 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 data/
+Keyframes_*/
+Keyframes_*.zip
+query/
+query.zip
 *.mp4
 *.mov
 *.avi

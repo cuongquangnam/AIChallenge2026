@@ -29,6 +29,18 @@ def index_cmd(
         print(result)
 
 
+@app.command("index-keyframes")
+def index_keyframes_cmd(
+    path: Path = typer.Argument(..., help="Directory containing video_id/*.jpg keyframes"),
+    limit: Optional[int] = typer.Option(None, help="Optional max number of images to index"),
+) -> None:
+    settings = get_settings()
+    indexer = VideoIndexer(settings)
+    results = indexer.index_keyframe_directory(path, limit=limit)
+    for result in results:
+        print(result)
+
+
 @app.command("search")
 def search_cmd(
     query: str = typer.Argument(...),
