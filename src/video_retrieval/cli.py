@@ -8,6 +8,7 @@ from rich import print
 
 from video_retrieval.config import get_settings
 from video_retrieval.pipeline.indexer import VideoIndexer
+from video_retrieval.qa.service import QAService
 from video_retrieval.search.service import SearchService
 
 app = typer.Typer(help="Index and search videos (keyframes + OCR/ASR).")
@@ -43,6 +44,20 @@ def search_cmd(
     else:
         response = service.search_hybrid(query, limit=limit)
     print(response)
+
+
+@app.command("qa")
+def qa_cmd(
+    question: str = typer.Argument(..., help="Question about an event in the video collection"),
+    group_count: int = typer.Option(10, min=1, max=20, help="Candidate frame groups"),
+    frame_radius: int = typer.Option(5, min=0, max=20, help="Frames before/after each center"),
+) -> None:
+    result = QAService(get_settings()).answer(
+        question,
+        group_count=group_count,
+        frame_radius=frame_radius,
+    )
+    print(result)
 
 
 @app.command("serve")

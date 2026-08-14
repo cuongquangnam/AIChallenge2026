@@ -85,3 +85,26 @@ class SearchResponse(BaseModel):
     query: str
     mode: str
     hits: list[SearchHit]
+
+
+class QAFrame(BaseModel):
+    frame_id: int
+    timestamp_sec: float
+    path: Path
+
+
+class QAFrameGroup(BaseModel):
+    video_id: str
+    center_frame_id: int
+    retrieval_score: float
+    frames: list[QAFrame]
+    sources: list[str] = Field(default_factory=list)
+
+
+class QAResult(BaseModel):
+    question: str
+    video_id: str
+    frame_id: int
+    answer: str
+    descriptions: list[str] = Field(default_factory=list)
+    frame_groups: list[QAFrameGroup] = Field(default_factory=list)

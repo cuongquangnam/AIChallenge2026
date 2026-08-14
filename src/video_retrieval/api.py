@@ -8,6 +8,13 @@ from pydantic import BaseModel, Field
 
 from video_retrieval.config import get_settings
 from video_retrieval.pipeline.indexer import VideoIndexer
+from video_retrieval.qa.frames import QAFrameExtractionError, VideoNotFoundForQAError
+from video_retrieval.qa.llm import (
+    InvalidQAModelResponseError,
+    QAModelNotConfiguredError,
+)
+from video_retrieval.qa.retrieval import NoQACandidatesError
+from video_retrieval.qa.service import QAService
 from video_retrieval.search.service import SearchService
 
 settings = get_settings()
@@ -30,6 +37,12 @@ class SearchRequest(BaseModel):
     mode: Literal["text", "visual", "hybrid"] = "hybrid"
     limit: int = Field(default=10, ge=1, le=100)
     vector_name: Literal["siglip", "beit3"] = "siglip"
+
+
+class QARequest(BaseModel):
+    question: str = Field(min_length=1)
+    group_count: int = Field(default=10, ge=1, le=20)
+    frame_radius: int = Field(default=5, ge=0, le=20)
 
 
 @app.get("/health")
@@ -72,3 +85,20 @@ def search(body: SearchRequest):
     else:
         response = service.search_hybrid(body.query, limit=body.limit)
     return response.model_dump(mode="json")
+
+
+@app.post("/qa")
+def answer_question(body: QARequest):
+    try:
+        result = QAService(settings).answer(
+            body.question,
+            group_count=body.group_count,
+            frame_radius=body.frame_radius,
+        )
+    except QAModelNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except VideoNotFoundForQAError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (NoQACandidatesError, QAFrameExtractionError, InvalidQAModelResponseError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result.model_dump(mode="json")

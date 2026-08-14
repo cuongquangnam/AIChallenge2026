@@ -31,6 +31,7 @@ video-index search "your query" --mode hybrid
 video-index serve
 # POST /index  { "path": "/path/to/video.mp4" }
 # POST /search { "query": "...", "mode": "hybrid" }
+# POST /qa     { "question": "...", "group_count": 10, "frame_radius": 5 }
 ```
 
 ## Layout
@@ -69,6 +70,27 @@ pip install -e ".[ml]"
 - `text` — keyword search over OCR + ASR in Elasticsearch  
 - `visual` — text→SigLIP embedding, nearest keyframes in Qdrant  
 - `hybrid` — reciprocal-rank fusion of both
+
+## Video question answering
+
+The Q&A pipeline asks an LLM to decompose a question, fuses OCR/ASR and visual
+retrieval to select a video and candidate keyframes, samples neighboring frames,
+then asks a multimodal LLM for `video_id`, `frame_id`, and `answer`.
+
+Configure an OpenAI-compatible multimodal endpoint in `.env`:
+
+```bash
+QA_LLM_BACKEND=openai_compatible
+QA_LLM_API_KEY=...
+QA_LLM_BASE_URL=https://api.openai.com/v1
+QA_LLM_MODEL=your-multimodal-model
+```
+
+Then run:
+
+```bash
+video-index qa "Trong video về lễ trao giải thưởng âm nhạc, có bao nhiêu người lên sân khấu?"
+```
 
 ## Tests
 

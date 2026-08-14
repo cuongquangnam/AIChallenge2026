@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     siglip_model_id: str = "google/siglip-base-patch16-224"
     beit3_model_id: str = "microsoft/beit-base-patch16-224"
 
+    # Multimodal Q&A. The openai_compatible backend expects a
+    # /chat/completions endpoint that accepts image_url content parts.
+    qa_llm_backend: str = "none"  # none | openai_compatible
+    qa_llm_api_key: str = ""
+    qa_llm_base_url: str = "https://api.openai.com/v1"
+    qa_llm_model: str = ""
+    qa_llm_timeout_sec: float = 120.0
+    qa_retrieval_limit: int = 50
+    qa_group_count: int = 10
+    qa_frame_radius: int = 5
+    qa_frame_stride: int = 1
+    qa_min_center_gap: int = 10
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 

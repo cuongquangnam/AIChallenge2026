@@ -77,3 +77,29 @@ def test_search_modes(client: TestClient) -> None:
         resp = client.post("/search", json={"query": "mix", "mode": "hybrid"})
     assert resp.status_code == 200
     assert resp.json()["mode"] == "hybrid"
+
+
+@pytest.mark.unit
+def test_qa_returns_service_result(client: TestClient, tmp_path: Path) -> None:
+    from video_retrieval.models import QAResult
+
+    result = QAResult(
+        question="How many people are on stage?",
+        video_id="awards",
+        frame_id=120,
+        answer="5",
+    )
+    with patch("video_retrieval.api.QAService") as mock_cls:
+        mock_cls.return_value.answer.return_value = result
+        resp = client.post(
+            "/qa",
+            json={
+                "question": "How many people are on stage?",
+                "group_count": 10,
+                "frame_radius": 5,
+            },
+        )
+    assert resp.status_code == 200
+    assert resp.json()["video_id"] == "awards"
+    assert resp.json()["frame_id"] == 120
+    assert resp.json()["answer"] == "5"
