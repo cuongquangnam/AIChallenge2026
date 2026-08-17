@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from video_retrieval.config import Settings
-from video_retrieval.models import AudioTrack
-from video_retrieval.text.asr import ASREngine
+from video_retrieval.models import AudioTrack, FrameRole, KeyFrame, Shot
+from video_retrieval.text.asr import ASREngine, attach_asr_docs_to_shots
 
 
 @pytest.mark.unit
@@ -156,3 +156,79 @@ def test_whisper_transcribe_handles_missing_segment_times(
     assert docs[0].text == "hello"
     assert docs[0].start_sec == 0.0
     assert docs[0].end_sec == 0.0
+
+
+@pytest.mark.unit
+def test_attach_asr_docs_to_shots_sets_middle_frame() -> None:
+    from video_retrieval.models import TextDocument
+
+    start = KeyFrame(
+        video_id="clip",
+        shot_index=1,
+        role=FrameRole.START,
+        frame_index=20,
+        timestamp_sec=2.0,
+        path=Path("shot_0001_start.jpg"),
+    )
+    middle = KeyFrame(
+        video_id="clip",
+        shot_index=1,
+        role=FrameRole.MIDDLE,
+        frame_index=30,
+        timestamp_sec=3.0,
+        path=Path("shot_0001_middle.jpg"),
+    )
+    shot = Shot(
+        video_id="clip",
+        shot_index=1,
+        start_frame=20,
+        end_frame=40,
+        start_sec=2.0,
+        end_sec=4.0,
+        keyframes=[start, middle],
+    )
+    docs = [
+        TextDocument(
+            doc_id="clip:asr:0",
+            video_id="clip",
+            source="asr",
+            text="hello",
+            start_sec=2.5,
+            end_sec=3.5,
+        )
+    ]
+
+    attached = attach_asr_docs_to_shots(docs, [shot])
+    assert attached[0].shot_index == 1
+    assert attached[0].frame_index == 30
+    assert attached[0].role == FrameRole.MIDDLE
+    assert attached[0].metadata["keyframe_path"] == "shot_0001_middle.jpg"
+
+
+@pytest.mark.unit
+def test_transcribe_with_shots_fills_frame_index(
+    tmp_path: Path, settings: Settings
+) -> None:
+    asr = ASREngine(settings)
+    audio = AudioTrack(video_id="clip", path=tmp_path / "clip.wav", duration_sec=1.5)
+    middle = KeyFrame(
+        video_id="clip",
+        shot_index=0,
+        role=FrameRole.MIDDLE,
+        frame_index=8,
+        timestamp_sec=0.8,
+        path=tmp_path / "shot_0000_middle.jpg",
+    )
+    shot = Shot(
+        video_id="clip",
+        shot_index=0,
+        start_frame=0,
+        end_frame=15,
+        start_sec=0.0,
+        end_sec=1.5,
+        keyframes=[middle],
+    )
+    docs = asr.transcribe(audio, shots=[shot])
+    assert docs[0].frame_index == 8
+    assert docs[0].shot_index == 0
+    assert docs[0].role == FrameRole.MIDDLE

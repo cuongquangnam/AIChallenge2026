@@ -149,18 +149,21 @@ class OCREngine:
                 response = self._client.models.generate_content(**kwargs)
                 return (response.text or "").strip()
             except genai_errors.APIError as exc:
-                if exc.code != 429:
-                    raise
+                if getattr(exc, "code", None) == 404:
+                    raise RuntimeError(_model_unavailable_message(self.settings, exc)) from exc
                 if _is_daily_quota_exhausted(exc):
                     raise RuntimeError(_daily_quota_message(exc)) from exc
-                if attempt >= max_retries - 1:
+                if not _is_retryable_api_error(exc) or attempt >= max_retries - 1:
                     raise
                 wait_seconds = max(
                     _retry_after_seconds(exc),
                     retry_delay * (2**attempt),
+                    15.0 if getattr(exc, "code", None) in {500, 502, 503, 504} else 0.0,
                 )
                 print(
-                    f"Gemini rate limited (429); retrying in {wait_seconds:.0f}s "
+                    f"Gemini {getattr(exc, 'code', 'error')} "
+                    f"({_api_error_status(exc) or 'transient'}); "
+                    f"retrying in {wait_seconds:.0f}s "
                     f"({attempt + 1}/{max_retries})"
                 )
                 time.sleep(wait_seconds)
@@ -249,6 +252,29 @@ def _parse_error_details(exc: Exception) -> list[dict]:
     return raw_details if isinstance(raw_details, list) else []
 
 
+RETRYABLE_API_CODES = {429, 500, 502, 503, 504}
+
+
+def _api_error_status(exc: Exception) -> str:
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        error = details.get("error", details)
+        if isinstance(error, dict):
+            return str(error.get("status") or "")
+    return str(getattr(exc, "status", "") or "")
+
+
+def _is_retryable_api_error(exc: Exception) -> bool:
+    if _is_daily_quota_exhausted(exc):
+        return False
+    code = getattr(exc, "code", None)
+    if code in RETRYABLE_API_CODES:
+        return True
+    status = _api_error_status(exc).upper()
+    message = str(getattr(exc, "message", "")).lower()
+    return status in {"UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL"} or "high demand" in message
+
+
 def _is_daily_quota_exhausted(exc: Exception) -> bool:
     for item in _parse_error_details(exc):
         if not isinstance(item, dict):
@@ -284,8 +310,16 @@ def _daily_quota_message(exc: Exception) -> str:
     return (
         "Gemini daily request quota exceeded for this model. "
         "Free tier limits are per-model and much lower than RPM (e.g. gemini-3.5-flash: 20/day). "
-        "Wait for the quota to reset, switch GEMINI_MODEL (e.g. gemini-2.0-flash), "
+        "Wait for the quota to reset, switch GEMINI_MODEL (e.g. gemini-3.1-flash-lite), "
         "increase GEMINI_BATCH_SIZE to use fewer requests, or enable billing. "
+        f"API message: {getattr(exc, 'message', exc)}"
+    )
+
+
+def _model_unavailable_message(settings: Settings, exc: Exception) -> str:
+    return (
+        f"Gemini model {settings.gemini_model!r} is not available for this API key. "
+        "Update GEMINI_MODEL to a current model (e.g. gemini-3.1-flash-lite or gemini-2.0-flash). "
         f"API message: {getattr(exc, 'message', exc)}"
     )
 

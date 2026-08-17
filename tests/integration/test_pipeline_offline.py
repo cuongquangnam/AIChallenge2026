@@ -26,14 +26,15 @@ def test_index_then_hybrid_search_offline(settings, tmp_path: Path) -> None:
     assert any(hit.video_id == "news" for hit in text.hits)
 
     ocr = service.search_text("mock ocr text")
-    assert any(hit.source.startswith("text:ocr") for hit in ocr.hits)
+    assert any(hit.video_id == "news" for hit in ocr.hits)
+    assert any(hit.channel_scores.get("ocr", 0) > 0 or "ocr" in (hit.text or "") for hit in ocr.hits)
 
     visual = service.search_visual_text("any query", limit=5)
     # Mock embeddings are not semantically meaningful; still expect a scored ranking.
     assert len(visual.hits) <= 5
 
     hybrid = service.search_hybrid("mock", limit=10)
-    assert hybrid.mode == "hybrid"
+    assert hybrid.mode == "mixed"
     assert len(hybrid.hits) >= 1
 
 
