@@ -13,13 +13,11 @@ def test_mock_encoder_dimensions_and_determinism(tmp_path: Path, settings: Setti
     image = write_dummy_image(tmp_path / "frame.jpg")
     encoder = VisualEncoder(settings)
 
-    a_sig, a_beit = encoder.encode_image(image)
-    b_sig, b_beit = encoder.encode_image(image)
+    a_sig = encoder.encode_image(image)
+    b_sig = encoder.encode_image(image)
 
     assert len(a_sig) == settings.siglip_dim
-    assert len(a_beit) == settings.beit3_dim
     assert a_sig == b_sig
-    assert a_beit == b_beit
 
 
 @pytest.mark.unit
@@ -40,3 +38,4 @@ def test_mock_encode_text_and_keyframes(tmp_path: Path, settings: Settings) -> N
     embeddings = encoder.encode_keyframes([kf])
     assert len(embeddings) == 1
     assert embeddings[0].keyframe.video_id == "v1"
+    assert len(embeddings[0].siglip) == settings.siglip_dim

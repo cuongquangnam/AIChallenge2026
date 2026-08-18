@@ -2,21 +2,31 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from video_retrieval.config import Settings
 from video_retrieval.models import FrameRole, KeyFrame, TextDocument
 
+_OCR_BACKENDS = {"mock", "gemini", "rapidocr"}
+
 
 class OCREngine:
-    """Gemini OCR with a mock backend for local development."""
+    """OCR via Gemini, on-device RapidOCR, or a mock backend."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.backend = settings.ocr_backend
+        self.backend = (settings.ocr_backend or "mock").strip().lower()
+        if self.backend not in _OCR_BACKENDS:
+            raise ValueError(
+                f"Unknown OCR_BACKEND={settings.ocr_backend!r}; "
+                "expected mock, gemini, or rapidocr"
+            )
         self._client = None
         self._rate_limiter: _GeminiRateLimiter | None = None
+        self._rapidocr_local = threading.local()
         if self.backend == "gemini":
             self._init_gemini()
 
@@ -41,6 +51,8 @@ class OCREngine:
         ocr_keyframes = [kf for kf in keyframes if kf.role == FrameRole.MIDDLE]
         if self.backend == "gemini":
             return self._extract_gemini_keyframes(ocr_keyframes)
+        if self.backend == "rapidocr":
+            return self._extract_rapidocr_keyframes(ocr_keyframes)
 
         docs: list[TextDocument] = []
         for kf in ocr_keyframes:
@@ -70,9 +82,44 @@ class OCREngine:
                 docs.append(self._to_text_document(kf, text))
         return docs
 
+    def _extract_rapidocr_keyframes(self, keyframes: list[KeyFrame]) -> list[TextDocument]:
+        if not keyframes:
+            return []
+        workers = max(self.settings.ocr_workers, 1)
+        total = len(keyframes)
+        print(f"OCR rapidocr: {total} middle frame(s), {workers} worker(s)")
+
+        def _one(kf: KeyFrame) -> tuple[KeyFrame, str]:
+            return kf, self._extract_rapidocr(kf.path)
+
+        results: list[tuple[KeyFrame, str]] = []
+        if workers == 1 or total == 1:
+            for index, kf in enumerate(keyframes, start=1):
+                results.append(_one(kf))
+                if index == 1 or index % 50 == 0 or index == total:
+                    print(f"OCR {index}/{total}")
+        else:
+            done = 0
+            with ThreadPoolExecutor(max_workers=min(workers, total)) as pool:
+                futures = [pool.submit(_one, kf) for kf in keyframes]
+                for future in as_completed(futures):
+                    results.append(future.result())
+                    done += 1
+                    if done == 1 or done % 50 == 0 or done == total:
+                        print(f"OCR {done}/{total}")
+
+        results.sort(key=lambda item: (item[0].shot_index, item[0].frame_index or 0))
+        docs: list[TextDocument] = []
+        for kf, text in results:
+            if text.strip():
+                docs.append(self._to_text_document(kf, text))
+        return docs
+
     def extract_text(self, image_path: Path) -> str:
         if self.backend == "gemini":
             return self._extract_gemini(image_path)
+        if self.backend == "rapidocr":
+            return self._extract_rapidocr(image_path)
         # Mock: tag middle frames so textual search is exerciseable end-to-end.
         name = image_path.stem
         if FrameRole.MIDDLE.value in name:
@@ -135,6 +182,13 @@ class OCREngine:
             kwargs["config"] = config
 
         return self._generate_with_retries(kwargs)
+
+    def _extract_rapidocr(self, image_path: Path) -> str:
+        engine = getattr(self._rapidocr_local, "engine", None)
+        if engine is None:
+            engine = _new_rapidocr()
+            self._rapidocr_local.engine = engine
+        return _rapidocr_texts(engine(str(image_path)))
 
     def _generate_with_retries(self, kwargs: dict) -> str:
         from google.genai import errors as genai_errors
@@ -201,6 +255,48 @@ class _GeminiRateLimiter:
             if elapsed < self.min_interval:
                 time.sleep(self.min_interval - elapsed)
         self._last_request_at = time.monotonic()
+
+
+def _new_rapidocr():
+    try:
+        from rapidocr import RapidOCR
+    except ImportError:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError as exc:
+            raise ImportError(
+                "Install ML extras: pip install '.[ml]' before OCR_BACKEND=rapidocr"
+            ) from exc
+    return RapidOCR()
+
+
+def _rapidocr_texts(result: object) -> str:
+    """Normalize RapidOCR 2.x / 3.x return values into a single string."""
+    if result is None:
+        return ""
+    txts = getattr(result, "txts", None)
+    if txts:
+        return "\n".join(str(text) for text in txts if str(text).strip()).strip()
+    if isinstance(result, tuple) and result:
+        result = result[0]
+    if not result:
+        return ""
+    if isinstance(result, dict):
+        return str(result.get("text") or "").strip()
+    lines: list[str] = []
+    if isinstance(result, list):
+        for item in result:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+            elif isinstance(item, (list, tuple)) and len(item) >= 2 and isinstance(item[1], str):
+                text = item[1].strip()
+            elif isinstance(item, str):
+                text = item.strip()
+            else:
+                continue
+            if text:
+                lines.append(text)
+    return "\n".join(lines)
 
 
 def _chunked(items: list[KeyFrame], size: int) -> list[list[KeyFrame]]:

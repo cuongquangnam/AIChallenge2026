@@ -12,7 +12,9 @@ from video_retrieval.models import SearchHit, VisualEmbedding
 
 
 class QdrantStore:
-    """Named-vector collection: siglip + beit3 per keyframe point."""
+    """SigLIP collection: one cosine vector per keyframe point."""
+
+    VECTOR_NAME = "siglip"
 
     def __init__(self, settings: Settings, client: QdrantClient | None = None):
         self.settings = settings
@@ -26,16 +28,18 @@ class QdrantStore:
 
     def ensure_collection(self) -> None:
         if self.client.collection_exists(self.collection):
-            return
+            if self._vector_names() == {self.VECTOR_NAME}:
+                return
+            print(
+                f"Recreating Qdrant collection {self.collection!r} as SigLIP-only "
+                f"(was {sorted(self._vector_names() or [])}). Re-index visual."
+            )
+            self.client.delete_collection(self.collection)
         self.client.create_collection(
             collection_name=self.collection,
             vectors_config={
-                "siglip": qm.VectorParams(
+                self.VECTOR_NAME: qm.VectorParams(
                     size=self.settings.siglip_dim,
-                    distance=qm.Distance.COSINE,
-                ),
-                "beit3": qm.VectorParams(
-                    size=self.settings.beit3_dim,
                     distance=qm.Distance.COSINE,
                 ),
             },
@@ -53,10 +57,12 @@ class QdrantStore:
         self,
         query_vector: list[float],
         *,
-        vector_name: str = "siglip",
+        vector_name: str = VECTOR_NAME,
         limit: int = 10,
         video_id: str | None = None,
     ) -> list[SearchHit]:
+        if vector_name != self.VECTOR_NAME:
+            raise ValueError(f"Only {self.VECTOR_NAME!r} vectors are stored")
         self.ensure_collection()
         query_filter = None
         if video_id:
@@ -67,7 +73,7 @@ class QdrantStore:
         result = self.client.query_points(
             collection_name=self.collection,
             query=query_vector,
-            using=vector_name,
+            using=self.VECTOR_NAME,
             query_filter=query_filter,
             limit=limit,
             with_payload=True,
@@ -79,7 +85,7 @@ class QdrantStore:
                 SearchHit(
                     video_id=str(payload.get("video_id", "")),
                     score=float(point.score or 0.0),
-                    source=f"visual:{vector_name}",
+                    source=f"visual:{self.VECTOR_NAME}",
                     shot_index=payload.get("shot_index"),
                     frame_index=payload.get("frame_index"),
                     role=payload.get("role"),
@@ -90,12 +96,31 @@ class QdrantStore:
             )
         return hits
 
+    def count_for_video(self, video_id: str) -> int:
+        if not self.client.collection_exists(self.collection):
+            return 0
+        result = self.client.count(
+            collection_name=self.collection,
+            count_filter=qm.Filter(
+                must=[qm.FieldCondition(key="video_id", match=qm.MatchValue(value=video_id))]
+            ),
+            exact=True,
+        )
+        return int(result.count)
+
+    def _vector_names(self) -> set[str] | None:
+        info = self.client.get_collection(self.collection)
+        vectors = info.config.params.vectors
+        if isinstance(vectors, dict):
+            return set(vectors)
+        return None
+
     def _to_point(self, emb: VisualEmbedding) -> qm.PointStruct:
         kf = emb.keyframe
         point_id = _stable_uuid(f"{kf.video_id}:{kf.shot_index}:{kf.role.value}:{kf.frame_index}")
         return qm.PointStruct(
             id=point_id,
-            vector={"siglip": emb.siglip, "beit3": emb.beit3},
+            vector={self.VECTOR_NAME: emb.siglip},
             payload={
                 "video_id": kf.video_id,
                 "shot_index": kf.shot_index,

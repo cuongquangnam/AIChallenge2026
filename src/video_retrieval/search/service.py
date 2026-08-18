@@ -81,10 +81,12 @@ class SearchService:
         limit: int = 10,
         vector_name: str = "siglip",
     ) -> SearchResponse:
-        siglip, beit3 = self.visual.encode_image(Path(image_path))
-        vector = siglip if vector_name == "siglip" else beit3
-        hits = self.qdrant.search(vector, vector_name=vector_name, limit=limit)
-        return SearchResponse(query=str(image_path), mode=f"visual_image:{vector_name}", hits=hits)
+        hits = self.qdrant.search(
+            self.visual.encode_image(Path(image_path)),
+            vector_name=vector_name,
+            limit=limit,
+        )
+        return SearchResponse(query=str(image_path), mode="visual_image:siglip", hits=hits)
 
     def search_hybrid(self, query: str, *, limit: int = 10) -> SearchResponse:
         return self.search_mixed(query, limit=limit)

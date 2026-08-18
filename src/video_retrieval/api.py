@@ -33,7 +33,7 @@ class SearchRequest(BaseModel):
     query: str
     mode: Literal["visual", "asr", "ocr", "mixed"] = "mixed"
     limit: int = Field(default=10, ge=1, le=100)
-    vector_name: Literal["siglip", "beit3"] = "siglip"
+    vector_name: Literal["siglip"] = "siglip"
 
 
 @app.get("/health")

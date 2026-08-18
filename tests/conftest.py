@@ -25,7 +25,6 @@ def settings(tmp_path: Path) -> Settings:
         asr_backend="mock",
         shot_backend="opencv",
         siglip_dim=32,
-        beit3_dim=32,
         query_planner="heuristic",
         gemini_api_key="",
     )

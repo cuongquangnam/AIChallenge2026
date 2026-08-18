@@ -42,7 +42,6 @@ class AudioTrack(BaseModel):
 class VisualEmbedding(BaseModel):
     keyframe: KeyFrame
     siglip: list[float]
-    beit3: list[float]
 
 
 class TextDocument(BaseModel):

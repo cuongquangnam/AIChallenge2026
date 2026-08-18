@@ -26,7 +26,10 @@ def _data_dir_option() -> Path | None:
 
 @app.command("index")
 def index_cmd(
-    path: Path = typer.Argument(..., help="Video file or directory of videos"),
+    path: Path = typer.Argument(
+        ...,
+        help="Video file, directory of videos, or keyframes directory (video-id folders)",
+    ),
     video_id: Optional[str] = typer.Option(None, help="Override video id for a single file"),
     data_dir: Optional[Path] = _data_dir_option(),
     only: Optional[str] = typer.Option(
@@ -44,6 +47,11 @@ def index_cmd(
         "--reuse-extract/--reextract",
         help="Reuse extracted keyframes/audio when present.",
     ),
+    resume: bool = typer.Option(
+        True,
+        "--resume/--rerun",
+        help="Skip videos whose requested stages are already in the manifest / Qdrant.",
+    ),
 ) -> None:
     settings = get_settings(data_dir=data_dir)
     indexer = VideoIndexer(settings)
@@ -53,7 +61,7 @@ def index_cmd(
             normalize_stages(selected)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
-    kwargs = {"stages": selected, "reuse_extract": reuse_extract}
+    kwargs = {"stages": selected, "reuse_extract": reuse_extract, "resume": resume}
     if path.is_dir():
         results = indexer.index_directory(path, **kwargs)
         for result in results:

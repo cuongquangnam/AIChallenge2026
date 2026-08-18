@@ -7,7 +7,11 @@ from pathlib import Path
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.extraction.audio import extract_audio
-from video_retrieval.extraction.keyframes import extract_keyframes
+from video_retrieval.extraction.keyframes import (
+    extract_keyframes,
+    load_existing_shots,
+    video_timing,
+)
 from video_retrieval.models import AudioTrack, IndexResult, KeyFrame, Shot, TextDocument
 from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
 from video_retrieval.storage.qdrant_store import QdrantStore
@@ -76,6 +80,7 @@ class VideoIndexer:
         *,
         stages: list[str] | set[str] | None = None,
         reuse_extract: bool = True,
+        resume: bool = True,
     ) -> IndexResult:
         video_path = Path(video_path).resolve()
         if not video_path.exists():
@@ -84,6 +89,20 @@ class VideoIndexer:
         selected = normalize_stages(stages)
         video_id = video_id or video_path.stem
         stored_video = self._store_video(video_path, video_id)
+        requested = set(selected)
+        if resume:
+            already = self._completed_stages(video_id)
+            selected = requested - already
+            if not selected:
+                print(f"Skipping {video_id}: already indexed {sorted(requested)}")
+                return self._result_from_manifest(video_id, stored_video, requested)
+            if already:
+                print(
+                    f"Resuming {video_id}: {sorted(selected)} "
+                    f"(already {sorted(already & requested)})"
+                )
+
+        print(f"Indexing {video_id}: stages={sorted(selected)}")
         shots, audio = self._ensure_extracted(
             stored_video,
             video_id,
@@ -125,6 +144,7 @@ class VideoIndexer:
             shots=shots,
             keyframes=keyframes,
             text_docs=existing_text,
+            indexed_stages=selected,
         )
         return IndexResult(
             video_id=video_id,
@@ -134,7 +154,7 @@ class VideoIndexer:
             num_visual_points=n_visual,
             num_text_docs=n_text,
             audio_path=audio.path if audio else None,
-            stages=sorted(selected),
+            stages=sorted(requested),
         )
 
     def index_directory(
@@ -143,21 +163,103 @@ class VideoIndexer:
         *,
         stages: list[str] | set[str] | None = None,
         reuse_extract: bool = True,
+        resume: bool = True,
     ) -> list[IndexResult]:
         directory = Path(directory)
         results: list[IndexResult] = []
-        for path in sorted(directory.iterdir()):
-            if path.suffix.lower() in VIDEO_EXTS:
+        videos = [
+            path
+            for path in sorted(directory.iterdir())
+            if path.is_file() and path.suffix.lower() in VIDEO_EXTS
+        ]
+        if videos:
+            for path in videos:
                 results.append(
-                    self.index_video(path, stages=stages, reuse_extract=reuse_extract)
+                    self.index_video(
+                        path,
+                        stages=stages,
+                        reuse_extract=reuse_extract,
+                        resume=resume,
+                    )
                 )
+            return results
+
+        for folder in sorted(directory.iterdir()):
+            if not folder.is_dir():
+                continue
+            video = self._video_for_id(folder.name)
+            if video is None:
+                continue
+            results.append(
+                self.index_video(
+                    video,
+                    video_id=folder.name,
+                    stages=stages,
+                    reuse_extract=reuse_extract,
+                    resume=resume,
+                )
+            )
         return results
 
+    def _video_for_id(self, video_id: str) -> Path | None:
+        for ext in sorted(VIDEO_EXTS):
+            candidate = self.settings.videos_dir / f"{video_id}{ext}"
+            if candidate.exists():
+                return candidate
+        return None
+
     def _store_video(self, video_path: Path, video_id: str) -> Path:
-        stored_video = self.settings.videos_dir / f"{video_id}{video_path.suffix.lower()}"
-        if video_path != stored_video.resolve():
-            shutil.copy2(video_path, stored_video)
+        stored_video = (self.settings.videos_dir / f"{video_id}{video_path.suffix.lower()}").resolve()
+        source = video_path.resolve()
+        if source == stored_video or stored_video.exists():
+            return stored_video
+        stored_video.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, stored_video)
         return stored_video
+
+    def _completed_stages(self, video_id: str) -> set[str]:
+        manifest = self._read_manifest(video_id)
+        if not manifest:
+            return set()
+        done = {str(item).strip().lower() for item in (manifest.get("indexed_stages") or [])}
+        sources = {
+            str(item.get("source") or "")
+            for item in (manifest.get("text_docs") or [])
+            if isinstance(item, dict)
+        }
+        if "ocr" in sources:
+            done.add("ocr")
+        if "asr" in sources:
+            done.add("asr")
+        if "visual" not in done:
+            expected = int(manifest.get("num_keyframes") or 0)
+            stored = self.qdrant.count_for_video(video_id)
+            if expected and stored >= expected:
+                done.add("visual")
+            elif expected == 0 and stored > 0:
+                done.add("visual")
+        return done & set(INDEX_STAGES)
+
+    def _result_from_manifest(
+        self,
+        video_id: str,
+        stored_video: Path,
+        selected: set[str],
+    ) -> IndexResult:
+        manifest = self._read_manifest(video_id)
+        audio_path = manifest.get("audio_path")
+        path = Path(audio_path) if audio_path else None
+        text_docs = manifest.get("text_docs") or []
+        return IndexResult(
+            video_id=video_id,
+            video_path=stored_video,
+            num_shots=int(manifest.get("num_shots") or 0),
+            num_keyframes=int(manifest.get("num_keyframes") or 0),
+            num_visual_points=0,
+            num_text_docs=len(text_docs) if isinstance(text_docs, list) else 0,
+            audio_path=path if path and path.exists() else None,
+            stages=sorted(selected),
+        )
 
     def _ensure_extracted(
         self,
@@ -173,7 +275,7 @@ class VideoIndexer:
         audio: AudioTrack | None = None
 
         if reuse_extract:
-            shots, audio = self._load_extracted(video_id)
+            shots, audio = self._load_extracted(video_id, stored_video)
 
         if need_shots and not shots:
             shots = extract_keyframes(
@@ -190,7 +292,11 @@ class VideoIndexer:
             raise FileNotFoundError(f"No keyframes for {video_id}")
         return shots, audio
 
-    def _load_extracted(self, video_id: str) -> tuple[list[Shot], AudioTrack | None]:
+    def _load_extracted(
+        self,
+        video_id: str,
+        video_path: Path | None = None,
+    ) -> tuple[list[Shot], AudioTrack | None]:
         manifest = self._read_manifest(video_id)
         shots: list[Shot] = []
         audio: AudioTrack | None = None
@@ -206,7 +312,25 @@ class VideoIndexer:
 
         wav = self.settings.audio_dir / f"{video_id}.wav"
         if audio is None and wav.exists():
-            audio = AudioTrack(video_id=video_id, path=wav)
+            audio = AudioTrack(
+                video_id=video_id,
+                path=wav,
+                duration_sec=_wav_duration(wav),
+            )
+        elif audio is not None and audio.duration_sec is None:
+            audio = audio.model_copy(update={"duration_sec": _wav_duration(audio.path)})
+
+        if not shots:
+            fps, duration = 25.0, audio.duration_sec if audio else None
+            if video_path and video_path.exists():
+                fps, video_duration = video_timing(video_path)
+                duration = duration or video_duration
+            shots = load_existing_shots(
+                self.settings.keyframes_dir,
+                video_id,
+                fps=fps,
+                duration_sec=duration,
+            )
         return shots, audio
 
     def _read_manifest(self, video_id: str) -> dict:
@@ -228,12 +352,19 @@ class VideoIndexer:
         shots: list[Shot],
         keyframes: list[KeyFrame],
         text_docs: list,
+        indexed_stages: set[str] | list[str] | None = None,
     ) -> None:
         existing = self._read_manifest(video_id)
         serialized_docs = [
             doc.model_dump(mode="json") if isinstance(doc, TextDocument) else doc
             for doc in text_docs
         ]
+        done = {str(item).strip().lower() for item in (existing.get("indexed_stages") or [])}
+        if indexed_stages:
+            done |= {str(item).strip().lower() for item in indexed_stages}
+        for doc in serialized_docs:
+            if isinstance(doc, dict) and doc.get("source") in INDEX_STAGES:
+                done.add(str(doc["source"]))
         manifest = {
             **existing,
             "video_id": video_id,
@@ -244,10 +375,14 @@ class VideoIndexer:
             "shots": [shot.model_dump(mode="json") for shot in shots]
             or existing.get("shots", []),
             "text_docs": serialized_docs,
+            "indexed_stages": sorted(done),
         }
         manifest_path = self.settings.manifests_dir / f"{video_id}.json"
         self.settings.manifests_dir.mkdir(parents=True, exist_ok=True)
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
 def normalize_stages(stages: list[str] | set[str] | None) -> set[str]:
@@ -272,3 +407,16 @@ def _replace_text_source(existing: list, source: str, docs: list[TextDocument]) 
         and not (isinstance(item, TextDocument) and item.source == source)
     ]
     return kept + list(docs)
+
+
+def _wav_duration(path: Path) -> float | None:
+    try:
+        import wave
+
+        with wave.open(str(path), "rb") as handle:
+            rate = handle.getframerate()
+            if rate <= 0:
+                return None
+            return handle.getnframes() / float(rate)
+    except Exception:
+        return None

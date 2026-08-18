@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import cv2
 
 from video_retrieval.extraction.shots import detect_shots_opencv, detect_shots_transnetv2
 from video_retrieval.models import FrameRole, KeyFrame, Shot
+
+_KEYFRAME_NAME = re.compile(
+    r"^shot_(\d+)_(start|middle|end)\.(jpg|jpeg|png)$",
+    re.IGNORECASE,
+)
+_ROLE_ORDER = {FrameRole.START: 0, FrameRole.MIDDLE: 1, FrameRole.END: 2}
 
 
 def extract_keyframes(
@@ -71,6 +78,82 @@ def extract_keyframes(
 
     cap.release()
     return shots
+
+
+def load_existing_shots(
+    output_dir: Path,
+    video_id: str,
+    *,
+    fps: float = 25.0,
+    duration_sec: float | None = None,
+) -> list[Shot]:
+    """Rebuild shot metadata from already-extracted keyframe files."""
+    folder = Path(output_dir) / video_id
+    if not folder.is_dir():
+        return []
+
+    grouped: dict[int, dict[FrameRole, Path]] = {}
+    for path in folder.iterdir():
+        if not path.is_file():
+            continue
+        match = _KEYFRAME_NAME.match(path.name)
+        if not match:
+            continue
+        shot_index = int(match.group(1))
+        role = FrameRole(match.group(2).lower())
+        grouped.setdefault(shot_index, {})[role] = path
+    if not grouped:
+        return []
+
+    fps = fps if fps and fps > 0 else 25.0
+    n_shots = len(grouped)
+    duration = duration_sec if duration_sec and duration_sec > 0 else float(n_shots)
+    shots: list[Shot] = []
+    for offset, shot_index in enumerate(sorted(grouped)):
+        start_sec = (offset / n_shots) * duration
+        end_sec = ((offset + 1) / n_shots) * duration
+        start_frame = int(round(start_sec * fps))
+        end_frame = max(start_frame, int(round(end_sec * fps)) - 1)
+        timestamps = {
+            FrameRole.START: start_sec,
+            FrameRole.MIDDLE: (start_sec + end_sec) / 2.0,
+            FrameRole.END: end_sec,
+        }
+        keyframes = [
+            KeyFrame(
+                video_id=video_id,
+                shot_index=shot_index,
+                role=role,
+                frame_index=int(round(timestamps[role] * fps)),
+                timestamp_sec=timestamps[role],
+                path=path,
+            )
+            for role, path in grouped[shot_index].items()
+        ]
+        keyframes.sort(key=lambda kf: _ROLE_ORDER.get(kf.role, 9))
+        shots.append(
+            Shot(
+                video_id=video_id,
+                shot_index=shot_index,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                start_sec=start_sec,
+                end_sec=end_sec,
+                keyframes=keyframes,
+            )
+        )
+    return shots
+
+
+def video_timing(video_path: Path) -> tuple[float, float | None]:
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return 25.0, None
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) or 25.0
+    frame_count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+    cap.release()
+    duration = frame_count / fps if fps > 0 and frame_count > 0 else None
+    return fps, duration
 
 
 def _read_frame(cap: cv2.VideoCapture, frame_index: int):

@@ -18,12 +18,12 @@ class Settings(BaseSettings):
     es_index: str = "video_text"
 
     siglip_dim: int = 768
-    beit3_dim: int = 768
 
     visual_backend: str = "mock"  # mock | real
-    ocr_backend: str = "mock"  # mock | gemini
+    ocr_backend: str = "mock"  # mock | gemini | rapidocr
     asr_backend: str = "mock"  # mock | whisper
     shot_backend: str = "opencv"  # opencv | transnetv2
+    ocr_workers: int = 4
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     query_planner: str = "auto"  # auto | gemini | heuristic
     whisper_model: str = "base"
     siglip_model_id: str = "google/siglip-base-patch16-224"
-    beit3_model_id: str = "microsoft/beit-base-patch16-224"
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000

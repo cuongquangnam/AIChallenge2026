@@ -17,6 +17,7 @@ from video_retrieval.text.ocr import (
     _is_retryable_api_error,
     _model_unavailable_message,
     _parse_batch_ocr_response,
+    _rapidocr_texts,
     _retry_after_seconds,
 )
 from tests.helpers import write_dummy_image
@@ -353,3 +354,71 @@ def test_mock_asr_returns_transcript(tmp_path: Path, settings: Settings) -> None
     assert len(docs) == 1
     assert docs[0].source == "asr"
     assert "clip" in docs[0].text
+
+
+@pytest.mark.unit
+def test_rapidocr_backend_only_processes_middle_frames(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings.ocr_backend = "rapidocr"
+    called: list[str] = []
+
+    def fake_extract_rapidocr(self, image_path: Path) -> str:
+        called.append(image_path.name)
+        return f"local ocr {image_path.name}"
+
+    monkeypatch.setattr(OCREngine, "_extract_rapidocr", fake_extract_rapidocr)
+    ocr = OCREngine(settings)
+    middle = KeyFrame(
+        video_id="clip",
+        shot_index=0,
+        role=FrameRole.MIDDLE,
+        frame_index=5,
+        timestamp_sec=0.5,
+        path=write_dummy_image(tmp_path / "shot_0000_middle.jpg"),
+    )
+    start = KeyFrame(
+        video_id="clip",
+        shot_index=0,
+        role=FrameRole.START,
+        frame_index=0,
+        timestamp_sec=0.0,
+        path=write_dummy_image(tmp_path / "shot_0000_start.jpg"),
+    )
+    docs = ocr.extract_from_keyframes([start, middle])
+    assert called == ["shot_0000_middle.jpg"]
+    assert len(docs) == 1
+    assert docs[0].text == "local ocr shot_0000_middle.jpg"
+
+
+@pytest.mark.unit
+def test_rapidocr_skips_empty_text(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings.ocr_backend = "rapidocr"
+    monkeypatch.setattr(OCREngine, "_extract_rapidocr", lambda self, path: "")
+    ocr = OCREngine(settings)
+    middle = KeyFrame(
+        video_id="clip",
+        shot_index=1,
+        role=FrameRole.MIDDLE,
+        frame_index=8,
+        timestamp_sec=1.0,
+        path=write_dummy_image(tmp_path / "shot_0001_middle.jpg"),
+    )
+    assert ocr.extract_from_keyframes([middle]) == []
+
+
+@pytest.mark.unit
+def test_unknown_ocr_backend_raises(settings: Settings) -> None:
+    settings.ocr_backend = "colab"
+    with pytest.raises(ValueError, match="OCR_BACKEND"):
+        OCREngine(settings)
+
+
+@pytest.mark.unit
+def test_rapidocr_texts_handles_versions() -> None:
+    assert _rapidocr_texts(SimpleNamespace(txts=("Hello", "World"))) == "Hello\nWorld"
+    assert _rapidocr_texts([["box", "VTV24", 0.9], ["box", "news", 0.8]]) == "VTV24\nnews"
+    assert _rapidocr_texts(([["box", "logo", 0.99]], 0.12)) == "logo"
+    assert _rapidocr_texts(None) == ""

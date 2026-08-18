@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from qdrant_client.http import models as qm
 from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.models import FrameRole, KeyFrame, VisualEmbedding
 from video_retrieval.storage.qdrant_store import QdrantStore, _stable_uuid
@@ -27,8 +28,8 @@ def test_qdrant_upsert_and_search_roundtrip(settings, tmp_path: Path) -> None:
         timestamp_sec=1.0,
         path=path,
     )
-    siglip, beit3 = encoder.encode_image(path)
-    n = store.upsert_embeddings([VisualEmbedding(keyframe=kf, siglip=siglip, beit3=beit3)])
+    siglip = encoder.encode_image(path)
+    n = store.upsert_embeddings([VisualEmbedding(keyframe=kf, siglip=siglip)])
     assert n == 1
 
     hits = store.search(siglip, vector_name="siglip", limit=5)
@@ -45,3 +46,17 @@ def test_qdrant_upsert_and_search_roundtrip(settings, tmp_path: Path) -> None:
 def test_qdrant_upsert_empty(settings) -> None:
     store = QdrantStore(settings)
     assert store.upsert_embeddings([]) == 0
+
+
+@pytest.mark.unit
+def test_qdrant_recreates_legacy_dual_vector_collection(settings) -> None:
+    store = QdrantStore(settings)
+    store.client.create_collection(
+        collection_name=settings.qdrant_collection,
+        vectors_config={
+            "siglip": qm.VectorParams(size=32, distance=qm.Distance.COSINE),
+            "beit3": qm.VectorParams(size=32, distance=qm.Distance.COSINE),
+        },
+    )
+    store.ensure_collection()
+    assert store._vector_names() == {"siglip"}

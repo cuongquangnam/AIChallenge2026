@@ -47,3 +47,4 @@ def test_settings_accepts_backend_overrides(tmp_path: Path) -> None:
     assert settings.ocr_backend == "mock"
     assert settings.asr_backend == "mock"
     assert settings.shot_backend == "opencv"
+    assert settings.ocr_workers == 4
