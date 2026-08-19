@@ -26,6 +26,8 @@ def settings(tmp_path: Path) -> Settings:
         shot_backend="opencv",
         siglip_dim=32,
         beit3_dim=32,
+        query_planner="heuristic",
+        gemini_api_key="",
     )
 
 

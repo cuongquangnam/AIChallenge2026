@@ -1,11 +1,12 @@
 from pathlib import Path
+import json
 
 import pytest
 
 from video_retrieval.pipeline.indexer import VideoIndexer
 from video_retrieval.storage.qdrant_store import QdrantStore
 from tests.fakes import FakeElasticsearchStore
-from tests.helpers import write_dummy_image, write_dummy_video
+from tests.helpers import write_dummy_video
 
 
 @pytest.mark.unit
@@ -39,7 +40,11 @@ def test_index_video_writes_manifest_and_counts(settings, tmp_path: Path) -> Non
 
     manifest = settings.data_dir / "manifests" / "sample.json"
     assert manifest.exists()
-    assert "sample" in manifest.read_text(encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    asr_docs = [doc for doc in payload["text_docs"] if doc["source"] == "asr"]
+    assert asr_docs
+    assert all(doc["frame_index"] is not None for doc in asr_docs)
+    assert all(doc["shot_index"] is not None for doc in asr_docs)
 
 
 @pytest.mark.unit
@@ -57,26 +62,38 @@ def test_index_directory_filters_extensions(settings, tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_index_keyframe_directory_visual_only(settings, tmp_path: Path) -> None:
-    root = tmp_path / "keyframes"
-    write_dummy_image(root / "L27_V001" / "001.jpg")
-    write_dummy_image(root / "L27_V001" / "002.jpg")
-    write_dummy_image(root / "L27_V002" / "001.jpg")
+def test_index_video_visual_only_skips_text(settings, tmp_path: Path) -> None:
+    video = write_dummy_video(tmp_path / "clip.mp4")
     fake_es = FakeElasticsearchStore()
-    qdrant = QdrantStore(settings)
     indexer = VideoIndexer(
         settings,
-        qdrant=qdrant,
+        qdrant=QdrantStore(settings),
         es=fake_es,  # type: ignore[arg-type]
     )
-
-    results = indexer.index_keyframe_directory(root, limit=2)
-
-    assert len(results) == 1
-    assert results[0].video_id == "L27_V001"
-    assert results[0].num_keyframes == 2
-    assert results[0].num_visual_points == 2
-    assert results[0].num_text_docs == 0
+    result = indexer.index_video(video, video_id="clip", stages=["visual"])
+    assert result.stages == ["visual"]
+    assert result.num_visual_points >= 3
+    assert result.num_text_docs == 0
     assert fake_es.docs == {}
-    manifest = settings.data_dir / "manifests" / "L27_V001.json"
-    assert manifest.exists()
+
+
+@pytest.mark.unit
+def test_index_video_ocr_only_then_asr(settings, tmp_path: Path) -> None:
+    video = write_dummy_video(tmp_path / "clip.mp4")
+    fake_es = FakeElasticsearchStore()
+    indexer = VideoIndexer(
+        settings,
+        qdrant=QdrantStore(settings),
+        es=fake_es,  # type: ignore[arg-type]
+    )
+    ocr_result = indexer.index_video(video, video_id="clip", stages=["ocr"])
+    assert ocr_result.num_visual_points == 0
+    assert ocr_result.num_text_docs >= 1
+    assert all(doc.source == "ocr" for doc in fake_es.docs.values())
+
+    asr_result = indexer.index_video(video, video_id="clip", stages=["asr"], reuse_extract=True)
+    assert asr_result.num_text_docs >= 1
+    sources = {doc.source for doc in fake_es.docs.values()}
+    assert sources == {"ocr", "asr"}
+    manifest = json.loads((settings.manifests_dir / "clip.json").read_text(encoding="utf-8"))
+    assert {doc["source"] for doc in manifest["text_docs"]} == {"ocr", "asr"}

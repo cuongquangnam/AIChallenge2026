@@ -44,7 +44,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
   "unit: fast isolated tests",
-  "integration: tests that need local infra or in-memory stores",
+  "integration: tests that need local infra, real models, or in-memory stores",
 ]
 filterwarnings = [
   "ignore::DeprecationWarning",

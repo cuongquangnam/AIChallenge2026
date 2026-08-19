@@ -21,16 +21,20 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
 
-# 3) Index a video
-video-index index /path/to/video.mp4
+# 3) Index a video (all stages, or split them)
+video-index index /path/to/video.mp4 --data-dir /path/to/outputs
+video-index index /path/to/video.mp4 --only visual
+video-index index /path/to/video.mp4 --only ocr --data-dir /path/to/outputs
+video-index index /path/to/video.mp4 --only asr
+video-index index /path/to/video.mp4 --stages visual,ocr
 
 # 4) Search
-video-index search "your query" --mode hybrid
+video-index search "your query" --mode mixed
 
 # 5) API
 video-index serve
 # POST /index  { "path": "/path/to/video.mp4" }
-# POST /search { "query": "...", "mode": "hybrid" }
+# POST /search { "query": "...", "mode": "mixed" }
 ```
 
 ## Layout
@@ -66,9 +70,23 @@ pip install -e ".[ml]"
 
 ## Search modes
 
-- `text` — keyword search over OCR + ASR in Elasticsearch  
-- `visual` — text→SigLIP embedding, nearest keyframes in Qdrant  
-- `hybrid` — reciprocal-rank fusion of both
+- `visual` — SigLIP nearest keyframes in Qdrant  
+- `asr` — spoken-text search in Elasticsearch  
+- `ocr` — on-screen text search in Elasticsearch  
+- `mixed` — Gemini (or heuristic) splits the query into those three channels, then **scores each frame** as a weighted mix
+
+## Index stages
+
+By default indexing runs **visual + OCR + ASR**. Split them with:
+
+- `--only visual` — SigLIP/BEiT → Qdrant  
+- `--only ocr` — Gemini OCR → Elasticsearch  
+- `--only asr` — Whisper ASR → Elasticsearch  
+- `--stages visual,ocr` — any subset  
+
+`--reuse-extract` (default) reuses keyframes/audio/manifest when present; `--reextract` forces shot/audio extraction again.
+
+`QUERY_PLANNER=auto` uses Gemini when `GEMINI_API_KEY` is set, otherwise the full query is sent to the selected channel(s).
 
 ## Task 2: music-award evidence retrieval
 

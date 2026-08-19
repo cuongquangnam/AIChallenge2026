@@ -14,6 +14,8 @@ from video_retrieval.text.ocr import (
     _daily_quota_message,
     _gemini_generation_config,
     _is_daily_quota_exhausted,
+    _is_retryable_api_error,
+    _model_unavailable_message,
     _parse_batch_ocr_response,
     _retry_after_seconds,
 )
@@ -242,6 +244,93 @@ def test_generate_with_retries_on_rate_limit(settings: Settings, monkeypatch: py
     assert text == "hello"
     assert ocr._client.models.generate_content.call_count == 2
     assert slept == [12.0]
+
+
+@pytest.mark.unit
+def test_generate_with_retries_on_unavailable(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from google.genai import errors as genai_errors
+
+    settings.ocr_backend = "gemini"
+    settings.gemini_api_key = "test-key"
+    settings.gemini_max_retries = 3
+
+    ocr = OCREngine(settings)
+    rate_limiter = MagicMock()
+    rate_limiter.min_interval = 12.0
+    ocr._rate_limiter = rate_limiter
+    ocr._client = MagicMock()
+
+    response_ok = SimpleNamespace(text="recovered")
+    ocr._client.models.generate_content.side_effect = [
+        genai_errors.ServerError(
+            503,
+            {
+                "error": {
+                    "code": 503,
+                    "message": "This model is currently experiencing high demand.",
+                    "status": "UNAVAILABLE",
+                }
+            },
+        ),
+        response_ok,
+    ]
+
+    slept: list[float] = []
+    monkeypatch.setattr("video_retrieval.text.ocr.time.sleep", lambda seconds: slept.append(seconds))
+
+    text = ocr._generate_with_retries({"model": "gemini-3.1-flash-lite"})
+    assert text == "recovered"
+    assert ocr._client.models.generate_content.call_count == 2
+    assert slept == [15.0]
+
+
+@pytest.mark.unit
+def test_generate_with_retries_raises_model_unavailable(settings: Settings) -> None:
+    from google.genai import errors as genai_errors
+
+    settings.ocr_backend = "gemini"
+    settings.gemini_api_key = "test-key"
+    settings.gemini_model = "gemini-2.5-flash-lite"
+
+    ocr = OCREngine(settings)
+    ocr._rate_limiter = MagicMock()
+    ocr._rate_limiter.min_interval = 12.0
+    ocr._client = MagicMock()
+    ocr._client.models.generate_content.side_effect = genai_errors.ClientError(
+        404,
+        {
+            "error": {
+                "code": 404,
+                "message": "This model models/gemini-2.5-flash-lite is no longer available to new users.",
+                "status": "NOT_FOUND",
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="GEMINI_MODEL"):
+        ocr._generate_with_retries({"model": settings.gemini_model})
+
+
+@pytest.mark.unit
+def test_is_retryable_api_error_for_503() -> None:
+    from google.genai import errors as genai_errors
+
+    exc = genai_errors.ServerError(
+        503,
+        {"error": {"message": "high demand", "status": "UNAVAILABLE"}},
+    )
+    assert _is_retryable_api_error(exc) is True
+
+
+@pytest.mark.unit
+def test_model_unavailable_message_mentions_setting() -> None:
+    from google.genai import errors as genai_errors
+
+    settings = Settings(gemini_model="gemini-2.5-flash-lite")
+    exc = genai_errors.ClientError(404, {"error": {"message": "no longer available"}})
+    message = _model_unavailable_message(settings, exc)
+    assert "gemini-2.5-flash-lite" in message
+    assert "GEMINI_MODEL" in message
 
 
 @pytest.mark.unit

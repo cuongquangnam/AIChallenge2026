@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from video_retrieval.models import IndexResult, SearchHit, SearchResponse, Task2RetrievalResponse
+from video_retrieval.models import IndexResult, SearchHit, SearchResponse
 
 
 @pytest.fixture
@@ -54,49 +54,34 @@ def test_index_success(client: TestClient, tmp_path: Path) -> None:
 @pytest.mark.unit
 def test_search_modes(client: TestClient) -> None:
     hit = SearchHit(video_id="clip", score=1.0, source="text:ocr", text="hello")
-    response = SearchResponse(query="hello", mode="text", hits=[hit])
+    response = SearchResponse(query="hello", mode="ocr", hits=[hit])
 
     with patch("video_retrieval.api.SearchService") as mock_cls:
-        mock_cls.return_value.search_text.return_value = response
-        resp = client.post("/search", json={"query": "hello", "mode": "text", "limit": 5})
+        mock_cls.return_value.search_ocr.return_value = response
+        resp = client.post("/search", json={"query": "hello", "mode": "ocr", "limit": 5})
     assert resp.status_code == 200
     assert resp.json()["hits"][0]["video_id"] == "clip"
 
     with patch("video_retrieval.api.SearchService") as mock_cls:
-        mock_cls.return_value.search_visual_text.return_value = SearchResponse(
-            query="cat", mode="visual_text:siglip", hits=[]
+        mock_cls.return_value.search_asr.return_value = SearchResponse(
+            query="hello", mode="asr", hits=[]
+        )
+        resp = client.post("/search", json={"query": "hello", "mode": "asr"})
+    assert resp.status_code == 200
+    assert resp.json()["mode"] == "asr"
+
+    with patch("video_retrieval.api.SearchService") as mock_cls:
+        mock_cls.return_value.search_visual.return_value = SearchResponse(
+            query="cat", mode="visual", hits=[]
         )
         resp = client.post("/search", json={"query": "cat", "mode": "visual"})
     assert resp.status_code == 200
-    assert resp.json()["mode"] == "visual_text:siglip"
+    assert resp.json()["mode"] == "visual"
 
     with patch("video_retrieval.api.SearchService") as mock_cls:
-        mock_cls.return_value.search_hybrid.return_value = SearchResponse(
-            query="mix", mode="hybrid", hits=[]
+        mock_cls.return_value.search_mixed.return_value = SearchResponse(
+            query="mix", mode="mixed", hits=[]
         )
-        resp = client.post("/search", json={"query": "mix", "mode": "hybrid"})
+        resp = client.post("/search", json={"query": "mix", "mode": "mixed"})
     assert resp.status_code == 200
-    assert resp.json()["mode"] == "hybrid"
-
-
-@pytest.mark.unit
-def test_task2_candidates(client: TestClient) -> None:
-    result = Task2RetrievalResponse(
-        question="award question",
-        queries={"visual": ["award stage"], "ocr": [], "asr": []},
-        groups=[],
-    )
-    with patch("video_retrieval.api.SearchService") as mock_cls:
-        mock_cls.return_value.retrieve_task2_candidates.return_value = result
-        resp = client.post("/task2/candidates", json={"video_id": "L27_V001"})
-
-    assert resp.status_code == 200
-    assert resp.json()["question"] == "award question"
-    mock_cls.return_value.retrieve_task2_candidates.assert_called_once_with(
-        video_id="L27_V001",
-        candidates_per_query=20,
-        group_limit=10,
-        max_gap_sec=10.0,
-        max_gap_frames=10,
-        context_radius_frames=5,
-    )
+    assert resp.json()["mode"] == "mixed"

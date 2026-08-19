@@ -66,6 +66,18 @@ class IndexResult(BaseModel):
     num_visual_points: int
     num_text_docs: int
     audio_path: Path | None = None
+    stages: list[str] = Field(default_factory=list)
+
+
+class QueryPlan(BaseModel):
+    """LLM-extracted search strings for each retrieval channel."""
+
+    ocr: str = ""
+    asr: str = ""
+    visual: str = ""
+    weights: dict[str, float] = Field(
+        default_factory=lambda: {"ocr": 1.0, "asr": 1.0, "visual": 1.0}
+    )
 
 
 class SearchHit(BaseModel):
@@ -79,16 +91,18 @@ class SearchHit(BaseModel):
     text: str | None = None
     keyframe_path: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    channel_scores: dict[str, float] = Field(default_factory=dict)
 
 
 class SearchResponse(BaseModel):
     query: str
     mode: str
     hits: list[SearchHit]
+    plan: QueryPlan | None = None
 
 
 class TemporalGroup(BaseModel):
-    """A time-localized event supported by one or more retrieval hits."""
+    """A time-localized candidate event supported by retrieval results."""
 
     video_id: str
     start_sec: float
@@ -105,7 +119,7 @@ class TemporalGroup(BaseModel):
 
 
 class Task2RetrievalResponse(BaseModel):
-    """Evidence groups for the music-award acceptance question."""
+    """Ranked visual evidence to send to a VLM for Task 2."""
 
     question: str
     queries: dict[str, list[str]]
