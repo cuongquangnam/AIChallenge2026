@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from video_retrieval.models import IndexResult, SearchHit, SearchResponse
+from video_retrieval.models import IndexResult, SearchHit, SearchResponse, Task2RetrievalResponse
 
 
 @pytest.fixture
@@ -77,3 +77,26 @@ def test_search_modes(client: TestClient) -> None:
         resp = client.post("/search", json={"query": "mix", "mode": "hybrid"})
     assert resp.status_code == 200
     assert resp.json()["mode"] == "hybrid"
+
+
+@pytest.mark.unit
+def test_task2_candidates(client: TestClient) -> None:
+    result = Task2RetrievalResponse(
+        question="award question",
+        queries={"visual": ["award stage"], "ocr": [], "asr": []},
+        groups=[],
+    )
+    with patch("video_retrieval.api.SearchService") as mock_cls:
+        mock_cls.return_value.retrieve_task2_candidates.return_value = result
+        resp = client.post("/task2/candidates", json={"video_id": "L27_V001"})
+
+    assert resp.status_code == 200
+    assert resp.json()["question"] == "award question"
+    mock_cls.return_value.retrieve_task2_candidates.assert_called_once_with(
+        video_id="L27_V001",
+        candidates_per_query=20,
+        group_limit=10,
+        max_gap_sec=10.0,
+        max_gap_frames=10,
+        context_radius_frames=5,
+    )

@@ -70,6 +70,34 @@ pip install -e ".[ml]"
 - `visual` — text→SigLIP embedding, nearest keyframes in Qdrant  
 - `hybrid` — reciprocal-rank fusion of both
 
+## Task 2: music-award evidence retrieval
+
+`task2-candidates` retrieves evidence for the question about how many winners
+walk on stage to accept the largest music award. It searches visual keyframes,
+OCR, and ASR with channel-specific queries; fuses their rankings; then groups
+nearby results from the same video into event windows.
+
+```bash
+video-index task2-candidates --video-id L27_V001
+```
+
+The equivalent API endpoint is `POST /task2/candidates`:
+
+```json
+{
+  "video_id": "L27_V001",
+  "candidates_per_query": 20,
+  "group_limit": 10,
+  "max_gap_sec": 10,
+  "max_gap_frames": 10,
+  "context_radius_frames": 5
+}
+```
+
+Each returned group contains evidence hits, a score, frame IDs around its
+center, and nearby keyframe paths from the index manifest. The caller can send
+those paths to a VLM to verify that it is the major award and count recipients.
+
 ## Tests
 
 ```bash

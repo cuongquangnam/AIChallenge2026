@@ -66,6 +66,27 @@ def search_cmd(
     print(response)
 
 
+@app.command("task2-candidates")
+def task2_candidates_cmd(
+    video_id: Optional[str] = typer.Option(None, help="Optional video to search within"),
+    candidates_per_query: int = typer.Option(20, min=1, max=100),
+    group_limit: int = typer.Option(10, min=1, max=20),
+    max_gap_sec: float = typer.Option(10.0, min=0.0),
+    max_gap_frames: int = typer.Option(10, min=0),
+    context_radius_frames: int = typer.Option(5, min=0),
+) -> None:
+    """Find ranked evidence windows for the Task 2 award-acceptance question."""
+    response = SearchService(get_settings()).retrieve_task2_candidates(
+        video_id=video_id,
+        candidates_per_query=candidates_per_query,
+        group_limit=group_limit,
+        max_gap_sec=max_gap_sec,
+        max_gap_frames=max_gap_frames,
+        context_radius_frames=context_radius_frames,
+    )
+    print(response)
+
+
 @app.command("serve")
 def serve_cmd(host: Optional[str] = None, port: Optional[int] = None) -> None:
     import uvicorn

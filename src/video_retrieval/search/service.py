@@ -5,6 +5,7 @@ from pathlib import Path
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.models import SearchHit, SearchResponse
+from video_retrieval.models import Task2RetrievalResponse
 from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
 from video_retrieval.storage.qdrant_store import QdrantStore
 
@@ -94,6 +95,30 @@ class SearchService:
         )
         merged = _rrf_fuse([text_hits, visual_hits], limit=limit)
         return SearchResponse(query=query, mode="hybrid", hits=merged)
+
+    def retrieve_task2_candidates(
+        self,
+        *,
+        video_id: str | None = None,
+        candidates_per_query: int = 20,
+        group_limit: int = 10,
+        max_gap_sec: float = 10.0,
+        max_gap_frames: int = 10,
+        context_radius_frames: int = 5,
+    ) -> Task2RetrievalResponse:
+        """Return top evidence windows for the music-award Task 2 question."""
+        from video_retrieval.search.task2 import retrieve_task2_candidates
+
+        return retrieve_task2_candidates(
+            self,
+            video_id=video_id,
+            candidates_per_query=candidates_per_query,
+            group_limit=group_limit,
+            max_gap_sec=max_gap_sec,
+            max_gap_frames=max_gap_frames,
+            context_radius_frames=context_radius_frames,
+            manifests_dir=self.settings.data_dir / "manifests",
+        )
 
 
 def _rrf_fuse(rankings: list[list[SearchHit]], *, limit: int, k: int = 60) -> list[SearchHit]:

@@ -85,3 +85,28 @@ class SearchResponse(BaseModel):
     query: str
     mode: str
     hits: list[SearchHit]
+
+
+class TemporalGroup(BaseModel):
+    """A time-localized event supported by one or more retrieval hits."""
+
+    video_id: str
+    start_sec: float
+    end_sec: float
+    center_sec: float
+    start_frame_index: int | None = None
+    end_frame_index: int | None = None
+    center_frame_index: int | None = None
+    context_frame_indices: list[int] = Field(default_factory=list)
+    context_keyframe_paths: list[str] = Field(default_factory=list)
+    score: float
+    sources: list[str]
+    hits: list[SearchHit]
+
+
+class Task2RetrievalResponse(BaseModel):
+    """Evidence groups for the music-award acceptance question."""
+
+    question: str
+    queries: dict[str, list[str]]
+    groups: list[TemporalGroup]
