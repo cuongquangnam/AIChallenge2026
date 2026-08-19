@@ -4,8 +4,8 @@ Offline indexing + search for a video collection, matching this architecture:
 
 1. **Key Frame Extraction** — shot detection → start / middle / end frames  
 2. **Audio Extraction** — WAV for ASR  
-3. **Visual indexing** — SigLIP embeddings → **Qdrant**  
-4. **Textual indexing** — Gemini OCR + Whisper ASR → **Elasticsearch**
+3. **Visual indexing** — SigLIP embeddings of start / middle / end keyframes → **Qdrant**
+4. **Textual indexing** — Gemini OCR (middle frames) + Whisper ASR → **Elasticsearch**
 
 Default backends are lightweight mocks so you can wire infra and run end-to-end without GPU weights. Flip env flags for real models.
 
@@ -87,8 +87,8 @@ pip install -e ".[ml]"
 
 By default indexing runs **visual + OCR + ASR**. Split them with:
 
-- `--only visual` — SigLIP → Qdrant  
-- `--only ocr` — RapidOCR or Gemini → Elasticsearch  
+- `--only visual` — SigLIP of start / middle / end keyframes → Qdrant  
+- `--only ocr` — RapidOCR or Gemini on **middle** frames → Elasticsearch  
 - `--only asr` — Whisper ASR → Elasticsearch  
 - `--stages visual,ocr` — any subset  
 
@@ -122,16 +122,22 @@ STAGES=ocr,asr ./scripts/index_existing_videos.sh --rerun
 
 ## Share Qdrant + Elasticsearch (Google Drive)
 
-Export the local Docker indexes (not the Docker volume folders):
+Export the local Docker **search indexes** (not Docker volume folders, manifests, or keyframe files):
 
 ```bash
 docker compose up -d
 ./scripts/export_search_backup.sh
 ```
 
-That writes `backups/aic-search-backup.zip`. Upload **only that zip** to Drive.
+That writes `backups/aic-search-backup.zip`. Upload **only that zip** to Drive. The script snapshots Qdrant collection `video_keyframes` and uses `scripts/es_backup.py` to dump Elasticsearch index `video_text`.
 
-Teammates download the zip, then:
+The zip includes enough metadata to search (`shot_index`, `role`, timestamps, `keyframe_path`). It does **not** include:
+
+- full shot lists (`data/manifests/*.json` with `start_frame` / `end_frame`)
+- keyframe JPEGs (`data/keyframes/`)
+- videos or audio
+
+Teammates can restore indexes and search. They still need `data/manifests/` and `data/keyframes/` to browse shots or re-index.
 
 ```bash
 docker compose up -d
