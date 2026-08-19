@@ -59,7 +59,7 @@ src/video_retrieval/
 | Visual encoders | `VISUAL_BACKEND` | `mock` \| `real` (uses Apple MPS on Mac) |
 | OCR | `OCR_BACKEND` | `mock` \| `rapidocr` (on-device) \| `gemini` |
 | ASR | `ASR_BACKEND` | `mock` \| `whisper` |
-| Query planner | `QUERY_PLANNER` | `heuristic` (local) \| `auto` \| `gemini` |
+| Query planner | `QUERY_PLANNER` | `heuristic` \| `ollama` (local LLM) \| `auto` \| `gemini` |
 
 Run the whole pipeline on a Mac with no Gemini key:
 
@@ -81,7 +81,7 @@ pip install -e ".[ml]"
 - `visual` — SigLIP nearest keyframes in Qdrant  
 - `asr` — spoken-text search in Elasticsearch  
 - `ocr` — on-screen text search in Elasticsearch  
-- `mixed` — Gemini (or heuristic) splits the query into those three channels, then **scores each frame** as a weighted mix
+- `mixed` — planner (heuristic / Ollama / Gemini) splits the query into OCR, ASR, and visual, then **scores each frame** as a weighted mix
 
 ## Index stages
 
@@ -117,6 +117,8 @@ STAGES=ocr,asr ./scripts/index_existing_videos.sh --rerun
 ```
 
 `QUERY_PLANNER=auto` uses Gemini when `GEMINI_API_KEY` is set, otherwise the full query is sent to the selected channel(s).
+
+`QUERY_PLANNER=ollama` uses a local model via [Ollama](https://ollama.com) (`OLLAMA_MODEL`, default `llama3.2`). If Ollama is down, search falls back to heuristic.
 
 ## Share Qdrant + Elasticsearch (Google Drive)
 

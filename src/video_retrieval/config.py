@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,9 +31,14 @@ class Settings(BaseSettings):
     gemini_rpm: int = 5
     gemini_max_retries: int = 8
     gemini_batch_size: int = 10
-    query_planner: str = "auto"  # auto | gemini | heuristic
+    query_planner: str = "auto"  # auto | gemini | heuristic | ollama
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
     whisper_model: str = "base"
     siglip_model_id: str = "google/siglip-base-patch16-224"
+    # After the first Hugging Face download, set to true to skip Hub metadata checks.
+    transformers_offline: bool = False
+    hf_hub_offline: bool = False
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -70,8 +76,17 @@ class Settings(BaseSettings):
         return self.model_copy(update={"data_dir": path.resolve()})
 
 
+def _apply_hf_offline_env(settings: Settings) -> None:
+    """Export HF offline flags so transformers/huggingface_hub read os.environ."""
+    if settings.transformers_offline:
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    if settings.hf_hub_offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+
+
 def get_settings(*, data_dir: Path | str | None = None) -> Settings:
     settings = Settings()
     if data_dir is not None:
-        return settings.with_data_dir(data_dir)
+        settings = settings.with_data_dir(data_dir)
+    _apply_hf_offline_env(settings)
     return settings

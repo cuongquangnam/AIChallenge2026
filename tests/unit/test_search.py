@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from video_retrieval.models import SearchHit
@@ -79,6 +81,16 @@ def test_parse_plan_reads_channel_queries() -> None:
 
 
 @pytest.mark.unit
+def test_plan_prompt_routes_image_queries_to_visual() -> None:
+    from video_retrieval.search.planner import _PLAN_PROMPT
+
+    prompt = _PLAN_PROMPT.format(query="find me an image of a teacher teaching a lot of children")
+    assert "visual 0.85-1.0" in prompt
+    assert '"visual":1.0' in prompt.replace(" ", "")
+    assert "Do not give ocr the highest weight just because the query contains nouns." in prompt
+
+
+@pytest.mark.unit
 def test_search_service_modes(settings, qdrant_store: QdrantStore) -> None:
     settings.query_planner = "heuristic"
     fake_es = FakeElasticsearchStore()
@@ -154,3 +166,50 @@ def test_search_planned_uses_channel_queries(settings, qdrant_store: QdrantStore
 def test_heuristic_plan_copies_query() -> None:
     plan = heuristic_plan("nhạc rock")
     assert plan.ocr == plan.asr == plan.visual == "nhạc rock"
+
+
+@pytest.mark.unit
+def test_ollama_planner_parses_json_response(settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from video_retrieval.search.planner import QueryPlanner
+
+    settings.query_planner = "ollama"
+    settings.ollama_url = "http://localhost:11434"
+    settings.ollama_model = "llama3.2"
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "response": json.dumps(
+                    {
+                        "ocr": "VTV24",
+                        "asr": "",
+                        "visual": "news anchor on television",
+                        "weights": {"ocr": 0.3, "asr": 0.0, "visual": 0.7},
+                    }
+                )
+            }
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def post(self, url, json=None):
+            return _FakeResponse()
+
+    monkeypatch.setattr("video_retrieval.search.planner.httpx.Client", _FakeClient)
+    planner = QueryPlanner(settings)
+    assert planner.backend == "ollama"
+    plan = planner.plan("the VTV24 logo")
+    assert plan.ocr == "VTV24"
+    assert plan.asr == ""
+    assert plan.visual == "news anchor on television"
+    assert plan.weights["visual"] == pytest.approx(0.7)

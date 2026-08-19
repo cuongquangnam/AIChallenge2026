@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,19 @@ def test_settings_with_data_dir_resolves_relative_path(tmp_path: Path, monkeypat
     updated = settings.with_data_dir("custom-out")
     assert updated.data_dir == (tmp_path / "custom-out").resolve()
     assert updated.videos_dir == updated.data_dir / "videos"
+
+
+@pytest.mark.unit
+def test_get_settings_exports_hf_offline_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from video_retrieval.config import _apply_hf_offline_env
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    settings = Settings(transformers_offline=True, hf_hub_offline=True)
+
+    _apply_hf_offline_env(settings)
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
 
 
 @pytest.mark.unit

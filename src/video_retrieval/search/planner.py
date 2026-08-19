@@ -3,22 +3,41 @@ from __future__ import annotations
 import json
 import re
 
+import httpx
+
 from video_retrieval.config import Settings
 from video_retrieval.models import QueryPlan
 
 _PLAN_PROMPT = """\
-Split a video-search query into three retrieval channels.
-Return JSON only, no markdown:
-{
-  "ocr": "words likely shown on screen (logos, captions, signs, names)",
-  "asr": "words likely spoken in the audio",
-  "visual": "English visual scene description for image-text embedding search",
-  "weights": {"ocr": 0.0-1.0, "asr": 0.0-1.0, "visual": 0.0-1.0}
-}
-Rules:
-- Use empty string if a channel is not relevant.
-- Keep ocr/asr in the query language; put visual in concise English.
-- Weights should sum to about 1; raise a channel if that is the user's main intent.
+Route a video-search query to OCR, ASR, and visual. Return JSON only, no markdown.
+{{
+  "ocr": "on-screen text only, or empty",
+  "asr": "spoken words only, or empty",
+  "visual": "concise English scene description, or empty",
+  "weights": {{"ocr": 0.0, "asr": 0.0, "visual": 0.0}}
+}}
+
+Channels:
+- ocr: logos, captions, signs, program/channel names, written words. Never people, actions, or scenes.
+- asr: quoted speech, "says"/"nói", spoken topics. Never what is seen.
+- visual: people, objects, actions, places, appearance, clothing, how many people, camera framing.
+
+Weights must sum to 1.0. Unused channel string = "" and weight = 0.0.
+- Image/photo/frame/scene/picture requests, or a description of what is seen → visual 0.85-1.0.
+- Logo, caption, or on-screen word → ocr 0.7-1.0.
+- Spoken audio / what someone says → asr 0.6-1.0.
+- Do not give ocr the highest weight just because the query contains nouns.
+
+Examples:
+find me an image of a teacher teaching a lot of children
+{{"ocr":"","asr":"","visual":"a teacher teaching many children in a classroom","weights":{{"ocr":0.0,"asr":0.0,"visual":1.0}}}}
+
+the VTV24 logo
+{{"ocr":"VTV24","asr":"","visual":"television channel logo","weights":{{"ocr":0.85,"asr":0.0,"visual":0.15}}}}
+
+người nói xin chào
+{{"ocr":"","asr":"xin chào","visual":"person speaking","weights":{{"ocr":0.0,"asr":0.7,"visual":0.3}}}}
+
 Query: {query}
 """
 
@@ -51,6 +70,11 @@ class QueryPlanner:
         query = query.strip()
         if not query:
             return QueryPlan()
+        if self.backend == "ollama":
+            try:
+                return self._plan_ollama(query)
+            except Exception:
+                return heuristic_plan(query)
         if self.backend != "gemini" or self._client is None:
             return heuristic_plan(query)
 
@@ -73,6 +97,20 @@ class QueryPlanner:
 
         response = self._client.models.generate_content(**kwargs)
         raw = (response.text or "").strip()
+        return parse_plan(raw, fallback_query=query)
+
+    def _plan_ollama(self, query: str) -> QueryPlan:
+        url = f"{self.settings.ollama_url.rstrip('/')}/api/generate"
+        payload = {
+            "model": self.settings.ollama_model,
+            "prompt": _PLAN_PROMPT.format(query=query),
+            "stream": False,
+            "format": "json",
+        }
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(url, json=payload)
+            response.raise_for_status()
+            raw = str((response.json() or {}).get("response") or "").strip()
         return parse_plan(raw, fallback_query=query)
 
 
@@ -107,6 +145,8 @@ def _planner_backend(settings: Settings) -> str:
     backend = (settings.query_planner or "auto").strip().lower()
     if backend == "heuristic":
         return "heuristic"
+    if backend == "ollama":
+        return "ollama"
     if backend in {"gemini", "auto"} and settings.gemini_api_key:
         return "gemini"
     return "heuristic"
