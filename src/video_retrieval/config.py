@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     elasticsearch_url: str = "http://localhost:9200"
 
     qdrant_collection: str = "video_keyframes"
+    qdrant_timeout: int = 300  # seconds; default Qdrant client REST timeout is 5s
     es_index: str = "video_text"
 
     siglip_dim: int = 768

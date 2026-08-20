@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,16 @@ from video_retrieval.storage.qdrant_store import QdrantStore
 
 _CHANNEL_LIMIT_FACTOR = 5
 _ASR_TIME_PAD_SEC = 1.5
+_CLAUSE_SPLIT = re.compile(r"(?<=[.!?。])\s+")
+
+
+def split_visual_clauses(text: str) -> list[str]:
+    """Split a long visual query into sentence-like clauses for multi-query search."""
+    text = text.strip()
+    if not text:
+        return []
+    parts = [part.strip() for part in _CLAUSE_SPLIT.split(text) if part.strip()]
+    return parts or [text]
 
 
 class SearchService:
@@ -67,11 +78,7 @@ class SearchService:
     ) -> SearchResponse:
         plan = self.planner.plan(query)
         text = plan.visual or query
-        hits = self.qdrant.search(
-            self.visual.encode_text(text),
-            vector_name=vector_name,
-            limit=limit,
-        )
+        hits = self._search_visual_clauses(text, limit=limit, vector_name=vector_name)
         return SearchResponse(query=query, mode="visual", hits=hits, plan=plan)
 
     def search_image(
@@ -118,10 +125,10 @@ class SearchService:
         if plan.asr:
             asr_hits = self.es.search(plan.asr, limit=channel_limit, source="asr")
         if plan.visual:
-            visual_hits = self.qdrant.search(
-                self.visual.encode_text(plan.visual),
-                vector_name=vector_name,
+            visual_hits = self._search_visual_clauses(
+                plan.visual,
                 limit=channel_limit,
+                vector_name=vector_name,
             )
 
         fused = fuse_frame_scores(
@@ -132,6 +139,41 @@ class SearchService:
             limit=limit,
         )
         return SearchResponse(query=query, mode="mixed", hits=fused, plan=plan)
+
+    def _search_visual_clauses(
+        self,
+        text: str,
+        *,
+        limit: int,
+        vector_name: str,
+    ) -> list[SearchHit]:
+        """Search each sentence separately, then merge rankings with RRF.
+
+        Long multi-clause queries (e.g. astronauts + aurora) describe different
+        scenes; one averaged embedding washes them out. Per-clause search keeps
+        both signals. Reciprocal rank fusion merges the lists without assuming
+        cosine scores are comparable across clauses.
+        """
+        clauses = split_visual_clauses(text)
+        if not clauses:
+            return []
+        if len(clauses) == 1:
+            return self.qdrant.search(
+                self.visual.encode_text(clauses[0]),
+                vector_name=vector_name,
+                limit=limit,
+            )
+
+        rankings: list[list[SearchHit]] = []
+        for clause in clauses:
+            rankings.append(
+                self.qdrant.search(
+                    self.visual.encode_text(clause),
+                    vector_name=vector_name,
+                    limit=limit,
+                )
+            )
+        return _rrf_fuse(rankings, limit=limit)
 
 
 def fuse_frame_scores(

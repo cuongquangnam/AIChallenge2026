@@ -427,11 +427,23 @@ def _gemini_ocr_config(model: str, *, json_response: bool):
     config_kwargs: dict = {}
     if json_response:
         config_kwargs["response_mime_type"] = "application/json"
-    if model.startswith("gemini-3"):
-        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
+    thinking_level = _gemini_thinking_level(model)
+    if thinking_level is not None:
+        config_kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=thinking_level
+        )
     if not config_kwargs:
         return None
     return types.GenerateContentConfig(**config_kwargs)
+
+
+def _gemini_thinking_level(model: str) -> str | None:
+    name = (model or "").strip().lower()
+    if not name.startswith("gemini-3"):
+        return None
+    if "pro" in name:
+        return "low"
+    return "minimal"
 
 
 # Backwards-compatible alias for tests.

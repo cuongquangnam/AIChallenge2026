@@ -11,18 +11,21 @@ from video_retrieval.models import QueryPlan
 _PLAN_PROMPT = """\
 Route a video-search query to OCR, ASR, and visual. Return JSON only, no markdown.
 {{
-  "ocr": "on-screen text only, or empty",
-  "asr": "spoken words only, or empty",
-  "visual": "concise English scene description, or empty",
+  "ocr": "",
+  "asr": "",
+  "visual": "",
   "weights": {{"ocr": 0.0, "asr": 0.0, "visual": 0.0}}
 }}
 
 Channels:
-- ocr: logos, captions, signs, program/channel names, written words. Never people, actions, or scenes.
-- asr: quoted speech, "says"/"nói", spoken topics. Never what is seen.
-- visual: people, objects, actions, places, appearance, clothing, how many people, camera framing.
+- ocr: logos, captions, signs, program/channel names, exact written words from the query. Never people, actions, or scenes.
+- asr: quoted speech, "says"/"nói", spoken topics. Leave empty unless the query implies spoken/news narration content. Never invent speech.
+- visual: concise English scene description (people, objects, actions, places, clothing, counts, colors, camera framing).
 
-Weights must sum to 1.0. Unused channel string = "" and weight = 0.0.
+Rules:
+- Translate concrete nouns exactly (hổ=tiger, dứa=pineapple, dê=goat, cực quang=aurora). Never substitute similar animals/foods.
+- Do not copy template phrases or example utterances into the output fields.
+- Weights must sum to 1.0. Unused channel string = "" and weight = 0.0.
 - Image/photo/frame/scene/picture requests, or a description of what is seen → visual 0.85-1.0.
 - Logo, caption, or on-screen word → ocr 0.7-1.0.
 - Spoken audio / what someone says → asr 0.6-1.0.
@@ -37,6 +40,9 @@ the VTV24 logo
 
 người nói xin chào
 {{"ocr":"","asr":"xin chào","visual":"person speaking","weights":{{"ocr":0.0,"asr":0.7,"visual":0.3}}}}
+
+Mẩu tin về đàn hổ miền Nam vừa có thêm 3-6 hổ con quý hiếm
+{{"ocr":"","asr":"tiger cubs rare tigers southern Vietnam","visual":"rare tiger cubs in southern Vietnam, news report about a tiger family with several baby tigers","weights":{{"ocr":0.0,"asr":0.25,"visual":0.75}}}}
 
 Query: {query}
 """
@@ -73,14 +79,23 @@ class QueryPlanner:
         if self.backend == "ollama":
             try:
                 return self._plan_ollama(query)
-            except Exception:
+            except Exception as exc:
+                print(f"[planner] ollama failed ({exc}); using heuristic plan", flush=True)
                 return heuristic_plan(query)
         if self.backend != "gemini" or self._client is None:
             return heuristic_plan(query)
 
         try:
-            return self._plan_gemini(query)
-        except Exception:
+            plan = self._plan_gemini(query)
+            if _looks_unplanned(plan, query):
+                print("[planner] gemini returned raw query echo; retrying once", flush=True)
+                plan = self._plan_gemini(query)
+            if _looks_unplanned(plan, query):
+                print("[planner] gemini plan still unparsed; using heuristic plan", flush=True)
+                return heuristic_plan(query)
+            return plan
+        except Exception as exc:
+            print(f"[planner] gemini failed ({exc}); using heuristic plan", flush=True)
             return heuristic_plan(query)
 
     def _plan_gemini(self, query: str) -> QueryPlan:
@@ -90,13 +105,34 @@ class QueryPlanner:
             "model": self.settings.gemini_model,
             "contents": _PLAN_PROMPT.format(query=query),
         }
-        config_kwargs: dict = {"response_mime_type": "application/json"}
-        if self.settings.gemini_model.startswith("gemini-3"):
-            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
+        config_kwargs: dict = {
+            "response_mime_type": "application/json",
+            # Planner only rewrites search strings; default filters false-positive
+            # block some Vietnamese KIS queries (e.g. "cô bé" + clothing props).
+            "safety_settings": [
+                types.SafetySetting(category=category, threshold="BLOCK_NONE")
+                for category in (
+                    "HARM_CATEGORY_HARASSMENT",
+                    "HARM_CATEGORY_HATE_SPEECH",
+                    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "HARM_CATEGORY_DANGEROUS_CONTENT",
+                )
+            ],
+        }
+        thinking_level = _gemini_thinking_level(self.settings.gemini_model)
+        if thinking_level is not None:
+            config_kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_level=thinking_level
+            )
         kwargs["config"] = types.GenerateContentConfig(**config_kwargs)
 
         response = self._client.models.generate_content(**kwargs)
         raw = (response.text or "").strip()
+        if not raw:
+            finish = None
+            if response.candidates:
+                finish = getattr(response.candidates[0], "finish_reason", None)
+            raise RuntimeError(f"empty Gemini planner response (finish_reason={finish})")
         return parse_plan(raw, fallback_query=query)
 
     def _plan_ollama(self, query: str) -> QueryPlan:
@@ -150,6 +186,29 @@ def _planner_backend(settings: Settings) -> str:
     if backend in {"gemini", "auto"} and settings.gemini_api_key:
         return "gemini"
     return "heuristic"
+
+
+def _gemini_thinking_level(model: str) -> str | None:
+    """Pick a thinking level supported by the configured Gemini model.
+
+    Gemini 3 Pro rejects ``minimal``; Flash/Lite accept it. Older Gemini 2.x
+    models do not need a thinking config.
+    """
+    name = (model or "").strip().lower()
+    if not name.startswith("gemini-3"):
+        return None
+    if "pro" in name:
+        return "low"
+    return "minimal"
+
+
+def _looks_unplanned(plan: QueryPlan, query: str) -> bool:
+    """True when the model echoed the raw query into every channel."""
+    q = query.strip()
+    if not q:
+        return False
+    channels = [plan.ocr.strip(), plan.asr.strip(), plan.visual.strip()]
+    return all(channel == q for channel in channels)
 
 
 def _load_json(raw: str) -> object:

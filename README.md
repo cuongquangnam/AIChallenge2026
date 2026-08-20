@@ -83,6 +83,19 @@ pip install -e ".[ml]"
 - `ocr` — on-screen text search in Elasticsearch  
 - `mixed` — planner (heuristic / Ollama / Gemini) splits the query into OCR, ASR, and visual, then **scores each frame** as a weighted mix
 
+### Textual KIS batch (100 answers per query)
+
+Put queries in a JSON object (`query_id` → text), then:
+
+```bash
+# uses QUERY_PLANNER / GEMINI_* from .env
+video-index kis queries/kis_p1.json --out-dir submissions/kis_p1 --limit 100
+# or:
+python scripts/run_kis_p1.py
+```
+
+Each output file is `{query_id}.csv` with 100 lines of `video_id,frame_idx` (no header).
+
 ## Index stages
 
 By default indexing runs **visual + OCR + ASR**. Split them with:

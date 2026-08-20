@@ -23,7 +23,11 @@ class QdrantStore:
         elif settings.qdrant_url in {":memory:", "memory"}:
             self.client = QdrantClient(location=":memory:")
         else:
-            self.client = QdrantClient(url=settings.qdrant_url)
+            self.client = QdrantClient(
+                url=settings.qdrant_url,
+                timeout=settings.qdrant_timeout,
+                check_compatibility=False,
+            )
         self.collection = settings.qdrant_collection
 
     def ensure_collection(self) -> None:
@@ -45,12 +49,14 @@ class QdrantStore:
             },
         )
 
-    def upsert_embeddings(self, embeddings: list[VisualEmbedding]) -> int:
+    def upsert_embeddings(self, embeddings: list[VisualEmbedding], *, batch_size: int = 64) -> int:
         if not embeddings:
             return 0
         self.ensure_collection()
         points = [self._to_point(emb) for emb in embeddings]
-        self.client.upsert(collection_name=self.collection, points=points)
+        for start in range(0, len(points), batch_size):
+            batch = points[start : start + batch_size]
+            self.client.upsert(collection_name=self.collection, points=batch)
         return len(points)
 
     def search(
