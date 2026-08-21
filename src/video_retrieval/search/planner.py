@@ -78,7 +78,9 @@ class QueryPlanner:
             return QueryPlan()
         if self.backend == "ollama":
             try:
-                return self._plan_ollama(query)
+                plan = self._plan_ollama(query)
+                plan.source = "ollama"
+                return plan
             except Exception as exc:
                 print(f"[planner] ollama failed ({exc}); using heuristic plan", flush=True)
                 return heuristic_plan(query)
@@ -89,21 +91,41 @@ class QueryPlanner:
             plan = self._plan_gemini(query)
             if _looks_unplanned(plan, query):
                 print("[planner] gemini returned raw query echo; retrying once", flush=True)
-                plan = self._plan_gemini(query)
+                plan = self._plan_gemini(query, soft_retry=True)
             if _looks_unplanned(plan, query):
                 print("[planner] gemini plan still unparsed; using heuristic plan", flush=True)
                 return heuristic_plan(query)
+            plan.source = "gemini"
             return plan
         except Exception as exc:
-            print(f"[planner] gemini failed ({exc}); using heuristic plan", flush=True)
-            return heuristic_plan(query)
+            print(f"[planner] gemini failed ({exc}); retrying with soft prompt", flush=True)
+            try:
+                plan = self._plan_gemini(query, soft_retry=True)
+                if _looks_unplanned(plan, query):
+                    raise RuntimeError("soft retry still unplanned")
+                plan.source = "gemini"
+                return plan
+            except Exception as retry_exc:
+                print(
+                    f"[planner] gemini soft retry failed ({retry_exc}); using heuristic plan",
+                    flush=True,
+                )
+                return heuristic_plan(query)
 
-    def _plan_gemini(self, query: str) -> QueryPlan:
+    def _plan_gemini(self, query: str, *, soft_retry: bool = False) -> QueryPlan:
         from google.genai import types
 
+        prompt = _PLAN_PROMPT.format(query=query)
+        if soft_retry:
+            prompt = (
+                "Benign video-archive retrieval task only. "
+                "Rewrite the query into OCR/ASR/visual search strings. "
+                "Do not refuse; the content is documentary / news footage.\n\n"
+                + prompt
+            )
         kwargs: dict = {
             "model": self.settings.gemini_model,
-            "contents": _PLAN_PROMPT.format(query=query),
+            "contents": prompt,
         }
         config_kwargs: dict = {
             "response_mime_type": "application/json",
@@ -116,11 +138,13 @@ class QueryPlanner:
                     "HARM_CATEGORY_HATE_SPEECH",
                     "HARM_CATEGORY_SEXUALLY_EXPLICIT",
                     "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "HARM_CATEGORY_CIVIC_INTEGRITY",
                 )
             ],
         }
         thinking_level = _gemini_thinking_level(self.settings.gemini_model)
-        if thinking_level is not None:
+        # Soft retries skip thinking — fewer empty PROHIBITED_CONTENT responses.
+        if thinking_level is not None and not soft_retry:
             config_kwargs["thinking_config"] = types.ThinkingConfig(
                 thinking_level=thinking_level
             )
@@ -152,7 +176,15 @@ class QueryPlanner:
 
 def heuristic_plan(query: str) -> QueryPlan:
     """Use the raw query for every channel when no LLM is available."""
-    return QueryPlan(ocr=query, asr=query, visual=query)
+    # Equal weights (sum=1). Old default of 1/1/1 looked like a "real" plan in the UI
+    # but was only a fallback after Gemini/Ollama failures.
+    return QueryPlan(
+        ocr=query,
+        asr=query,
+        visual=query,
+        weights={"ocr": 1.0 / 3, "asr": 1.0 / 3, "visual": 1.0 / 3},
+        source="heuristic",
+    )
 
 
 def parse_plan(raw: str, *, fallback_query: str) -> QueryPlan:
@@ -162,15 +194,18 @@ def parse_plan(raw: str, *, fallback_query: str) -> QueryPlan:
 
     weights_raw = payload.get("weights") or {}
     weights = {
-        "ocr": _as_weight(weights_raw.get("ocr"), 1.0),
-        "asr": _as_weight(weights_raw.get("asr"), 1.0),
-        "visual": _as_weight(weights_raw.get("visual"), 1.0),
+        "ocr": _as_weight(weights_raw.get("ocr"), 0.0),
+        "asr": _as_weight(weights_raw.get("asr"), 0.0),
+        "visual": _as_weight(weights_raw.get("visual"), 0.0),
     }
+    if sum(weights.values()) <= 0:
+        weights = {"ocr": 1.0 / 3, "asr": 1.0 / 3, "visual": 1.0 / 3}
     plan = QueryPlan(
         ocr=str(payload.get("ocr") or "").strip(),
         asr=str(payload.get("asr") or "").strip(),
         visual=str(payload.get("visual") or "").strip(),
         weights=weights,
+        source="gemini",
     )
     if not (plan.ocr or plan.asr or plan.visual):
         return heuristic_plan(fallback_query)

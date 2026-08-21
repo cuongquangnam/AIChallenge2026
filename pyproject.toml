@@ -56,6 +56,9 @@ video-index = "video_retrieval.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+video_retrieval = ["web/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

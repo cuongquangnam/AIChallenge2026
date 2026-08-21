@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Framefind — Video Keyframe Search</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <main class="shell">
+      <header class="hero">
+        <p class="brand">Framefind</p>
+        <h1>Ask in words. See the frames.</h1>
+        <p class="lede">
+          Search indexed video keyframes with mixed visual, OCR, and ASR retrieval.
+        </p>
+
+        <form id="search-form" class="search-form" autocomplete="off">
+          <label class="sr-only" for="query">Search query</label>
+          <textarea
+            id="query"
+            name="query"
+            rows="3"
+            placeholder="Describe the scene you want to find…"
+            required
+          ></textarea>
+
+          <div class="controls">
+            <label class="field">
+              <span>Mode</span>
+              <select id="mode" name="mode">
+                <option value="mixed" selected>Mixed</option>
+                <option value="visual">Visual</option>
+                <option value="ocr">OCR</option>
+                <option value="asr">ASR</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Results</span>
+              <select id="limit" name="limit">
+                <option value="12">12</option>
+                <option value="24" selected>24</option>
+                <option value="48">48</option>
+                <option value="100">100</option>
+              </select>
+            </label>
+            <button type="submit" id="submit-btn">Search frames</button>
+          </div>
+        </form>
+      </header>
+
+      <section class="status" id="status" aria-live="polite"></section>
+
+      <section class="results" id="results" hidden>
+        <div class="results-head">
+          <div>
+            <h2>Keyframe matches</h2>
+            <p id="results-meta"></p>
+          </div>
+          <div class="export-bar">
+            <label class="field export-field">
+              <span>Query id</span>
+              <input
+                id="export-query-id"
+                type="text"
+                value="query-p1-1-kis"
+                placeholder="query-p1-1-kis"
+                spellcheck="false"
+              />
+            </label>
+            <label class="field export-field">
+              <span>Rows</span>
+              <select id="export-limit">
+                <option value="100" selected>100</option>
+                <option value="50">50</option>
+                <option value="10">10</option>
+                <option value="exact">Exact list</option>
+              </select>
+            </label>
+            <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+          </div>
+        </div>
+        <aside class="plan" id="plan" hidden>
+          <h3>Planner</h3>
+          <dl id="plan-body"></dl>
+        </aside>
+        <div class="grid" id="grid"></div>
+      </section>
+    </main>
+
+    <dialog id="lightbox" class="lightbox">
+      <div class="lightbox-bar">
+        <button type="button" class="lightbox-close" id="lightbox-close">Close</button>
+        <button type="button" class="lightbox-open-video" id="lightbox-open-video" hidden>
+          Play from this moment
+        </button>
+        <button type="button" class="lightbox-add-frame" id="lightbox-add-frame" hidden>
+          Add current frame
+        </button>
+      </div>
+      <div class="lightbox-stage">
+        <img id="lightbox-img" alt="" />
+        <video id="lightbox-video" controls playsinline hidden></video>
+      </div>
+      <p id="lightbox-meta"></p>
+    </dialog>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

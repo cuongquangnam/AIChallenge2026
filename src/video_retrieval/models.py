@@ -75,8 +75,9 @@ class QueryPlan(BaseModel):
     asr: str = ""
     visual: str = ""
     weights: dict[str, float] = Field(
-        default_factory=lambda: {"ocr": 1.0, "asr": 1.0, "visual": 1.0}
+        default_factory=lambda: {"ocr": 1.0 / 3, "asr": 1.0 / 3, "visual": 1.0 / 3}
     )
+    source: str = "heuristic"  # gemini | ollama | heuristic
 
 
 class SearchHit(BaseModel):

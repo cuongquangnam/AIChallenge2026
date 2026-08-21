@@ -96,6 +96,15 @@ python scripts/run_kis_p1.py
 
 Each output file is `{query_id}.csv` with 100 lines of `video_id,frame_idx` (no header).
 
+### Web UI
+
+```bash
+video-index serve
+# open http://localhost:8000
+```
+
+Submit a natural-language query; matching keyframes render as an image grid (`GET /media/keyframes/...`).
+
 ## Index stages
 
 By default indexing runs **visual + OCR + ASR**. Split them with:
