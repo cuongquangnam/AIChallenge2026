@@ -99,3 +99,51 @@ class SearchResponse(BaseModel):
     mode: str
     hits: list[SearchHit]
     plan: QueryPlan | None = None
+
+
+class TemporalGroup(BaseModel):
+    """A time-localized candidate event supported by retrieval results."""
+
+    video_id: str
+    start_sec: float
+    end_sec: float
+    center_sec: float
+    start_frame_index: int | None = None
+    end_frame_index: int | None = None
+    center_frame_index: int | None = None
+    context_frame_indices: list[int] = Field(default_factory=list)
+    context_keyframe_paths: list[str] = Field(default_factory=list)
+    score: float
+    sources: list[str]
+    hits: list[SearchHit]
+
+
+class Task2RetrievalResponse(BaseModel):
+    """Ranked visual evidence to send to a VLM for Task 2."""
+
+    question: str
+    queries: dict[str, list[str]]
+    video_id: str | None = None
+    groups: list[TemporalGroup]
+
+
+class Task2GroupVerdict(BaseModel):
+    is_major_award: bool
+    winner_count: int | None = None
+    evidence_frame_ids: list[int] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = ""
+
+
+class Task2BatchVerdict(Task2GroupVerdict):
+    """Gemini's decision after comparing all candidate time windows."""
+
+    selected_group_index: int | None = None
+
+
+class Task2AnswerResponse(BaseModel):
+    video_id: str | None = None
+    frame_id: int | None = None
+    answer: int | None = None
+    confidence: float = 0.0
+    verdicts: list[Task2GroupVerdict] = Field(default_factory=list)

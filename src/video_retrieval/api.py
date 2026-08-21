@@ -36,6 +36,19 @@ class SearchRequest(BaseModel):
     vector_name: Literal["siglip", "beit3"] = "siglip"
 
 
+class Task2CandidatesRequest(BaseModel):
+    video_id: str | None = None
+    video_dir: str | None = None
+    candidates_per_query: int = Field(default=20, ge=1, le=100)
+    group_limit: int = Field(default=10, ge=1, le=20)
+    max_gap_sec: float = Field(default=10.0, ge=0.0, le=120.0)
+    max_gap_frames: int = Field(default=10, ge=0, le=1000)
+    context_radius_frames: int = Field(default=5, ge=0, le=100)
+    context_stride_frames: int = Field(default=1, ge=1, le=1000)
+    excluded_video_ids: list[str] = Field(default_factory=list)
+    allowed_video_ids: list[str] | None = None
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -100,14 +113,6 @@ async def index_upload(
         stages=_selected_stages(only, selected),
         reuse_extract=reuse_extract,
     )
-    index_settings = _index_settings(data_dir)
-    index_settings.ensure_dirs()
-    suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
-    dest = index_settings.videos_dir / f"{video_id or Path(file.filename or 'upload').stem}{suffix}"
-    content = await file.read()
-    dest.write_bytes(content)
-    indexer = VideoIndexer(index_settings)
-    result = indexer.index_video(dest, video_id=video_id)
     return result.model_dump(mode="json")
 
 
@@ -126,4 +131,40 @@ def search(body: SearchRequest):
         response = service.search_mixed(
             body.query, limit=body.limit, vector_name=body.vector_name
         )
+    return response.model_dump(mode="json")
+
+
+@app.post("/task2/candidates")
+def task2_candidates(body: Task2CandidatesRequest):
+    """Return evidence groups for VLM counting in the music-award Q&A task."""
+    response = SearchService(settings).retrieve_task2_candidates(
+        video_id=body.video_id,
+        candidates_per_query=body.candidates_per_query,
+        group_limit=body.group_limit,
+        max_gap_sec=body.max_gap_sec,
+        max_gap_frames=body.max_gap_frames,
+        context_radius_frames=body.context_radius_frames,
+        context_stride_frames=body.context_stride_frames,
+        excluded_video_ids=set(body.excluded_video_ids),
+        allowed_video_ids=set(body.allowed_video_ids) if body.allowed_video_ids is not None else None,
+        videos_dir=Path(body.video_dir) if body.video_dir else None,
+    )
+    return response.model_dump(mode="json")
+
+
+@app.post("/task2/answer")
+def task2_answer(body: Task2CandidatesRequest):
+    """Run retrieval plus Gemini verification for the Task 2 answer."""
+    response = SearchService(settings).answer_task2(
+        video_id=body.video_id,
+        videos_dir=Path(body.video_dir) if body.video_dir else None,
+        candidates_per_query=body.candidates_per_query,
+        group_limit=body.group_limit,
+        max_gap_sec=body.max_gap_sec,
+        max_gap_frames=body.max_gap_frames,
+        context_radius_frames=body.context_radius_frames,
+        context_stride_frames=body.context_stride_frames,
+        excluded_video_ids=set(body.excluded_video_ids),
+        allowed_video_ids=set(body.allowed_video_ids) if body.allowed_video_ids is not None else None,
+    )
     return response.model_dump(mode="json")

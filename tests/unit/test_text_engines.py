@@ -22,6 +22,13 @@ from video_retrieval.text.ocr import (
 from tests.helpers import write_dummy_image
 
 
+def _genai_errors_or_skip():
+    pytest.importorskip("google.genai")
+    from google.genai import errors as genai_errors
+
+    return genai_errors
+
+
 @pytest.mark.unit
 def test_mock_ocr_only_middle_frames(tmp_path: Path, settings: Settings) -> None:
     ocr = OCREngine(settings)
@@ -60,6 +67,7 @@ def test_extract_from_keyframes_only_processes_middle_frames(
         return {kf.path.name: "ocr text" for kf in keyframes}
 
     monkeypatch.setattr(OCREngine, "_extract_gemini_batch", fake_extract_gemini_batch)
+    monkeypatch.setattr(OCREngine, "_init_gemini", lambda self: None)
 
     ocr = OCREngine(settings)
     middle = KeyFrame(
@@ -97,6 +105,7 @@ def test_extract_from_keyframes_batches_gemini_requests(
         return {kf.path.name: f"text from {kf.path.name}" for kf in keyframes}
 
     monkeypatch.setattr(OCREngine, "_extract_gemini_batch", fake_extract_gemini_batch)
+    monkeypatch.setattr(OCREngine, "_init_gemini", lambda self: None)
 
     ocr = OCREngine(settings)
     keyframes = [
@@ -140,7 +149,7 @@ def test_parse_batch_ocr_response_handles_invalid_json() -> None:
 
 @pytest.mark.unit
 def test_is_daily_quota_exhausted_detects_per_day_limit() -> None:
-    from google.genai import errors as genai_errors
+    genai_errors = _genai_errors_or_skip()
 
     exc = genai_errors.ClientError(
         429,
@@ -165,7 +174,7 @@ def test_is_daily_quota_exhausted_detects_per_day_limit() -> None:
 
 @pytest.mark.unit
 def test_retry_after_seconds_reads_retry_info() -> None:
-    from google.genai import errors as genai_errors
+    genai_errors = _genai_errors_or_skip()
 
     exc = genai_errors.ClientError(
         429,
@@ -181,7 +190,7 @@ def test_retry_after_seconds_reads_retry_info() -> None:
 
 @pytest.mark.unit
 def test_daily_quota_message_is_actionable() -> None:
-    from google.genai import errors as genai_errors
+    genai_errors = _genai_errors_or_skip()
 
     exc = genai_errors.ClientError(429, {"error": {"message": "quota exceeded"}})
     message = _daily_quota_message(exc)
@@ -210,7 +219,7 @@ def test_gemini_rate_limiter_waits_between_requests(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.unit
 def test_generate_with_retries_on_rate_limit(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    from google.genai import errors as genai_errors
+    genai_errors = _genai_errors_or_skip()
 
     settings.ocr_backend = "gemini"
     settings.gemini_api_key = "test-key"
@@ -326,6 +335,7 @@ def test_model_unavailable_message_mentions_setting() -> None:
 
 @pytest.mark.unit
 def test_gemini_generation_config_for_v3_models() -> None:
+    pytest.importorskip("google.genai")
     config = _gemini_generation_config("gemini-3.5-flash", json_response=True)
     assert config is not None
     assert config.thinking_config is not None

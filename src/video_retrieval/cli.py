@@ -94,6 +94,37 @@ def search_cmd(
     print(response)
 
 
+@app.command("task2-candidates")
+def task2_candidates_cmd(
+    video_id: Optional[str] = typer.Option(None, help="Optional video to search within"),
+    video_dir: Optional[Path] = typer.Option(
+        None,
+        "--video-dir",
+        help="Source videos used to extract VLM context frames.",
+        dir_okay=True,
+        file_okay=False,
+        resolve_path=True,
+    ),
+    candidates_per_query: int = typer.Option(20, min=1, max=100),
+    group_limit: int = typer.Option(10, min=1, max=20),
+    max_gap_sec: float = typer.Option(10.0, min=0.0),
+    max_gap_frames: int = typer.Option(10, min=0),
+    context_radius_frames: int = typer.Option(5, min=0),
+    data_dir: Optional[Path] = _data_dir_option(),
+) -> None:
+    """Retrieve frame evidence for the music-award Q&A task."""
+    response = SearchService(get_settings(data_dir=data_dir)).retrieve_task2_candidates(
+        video_id=video_id,
+        candidates_per_query=candidates_per_query,
+        group_limit=group_limit,
+        max_gap_sec=max_gap_sec,
+        max_gap_frames=max_gap_frames,
+        context_radius_frames=context_radius_frames,
+        videos_dir=video_dir,
+    )
+    print(response)
+
+
 @app.command("serve")
 def serve_cmd(
     host: Optional[str] = None,

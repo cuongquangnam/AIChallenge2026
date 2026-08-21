@@ -326,15 +326,18 @@ def _model_unavailable_message(settings: Settings, exc: Exception) -> str:
 
 def _gemini_ocr_config(model: str, *, json_response: bool):
     """Build Gemini generation config for OCR requests."""
+    needs_thinking_config = model.startswith("gemini-3")
+    if not json_response and not needs_thinking_config:
+        return None
+
     from google.genai import types
 
     config_kwargs: dict = {}
     if json_response:
         config_kwargs["response_mime_type"] = "application/json"
-    if model.startswith("gemini-3"):
+    if needs_thinking_config:
         config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
-    if not config_kwargs:
-        return None
+
     return types.GenerateContentConfig(**config_kwargs)
 
 

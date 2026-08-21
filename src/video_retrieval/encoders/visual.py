@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import hashlib
 
 import numpy as np
 from PIL import Image
@@ -20,10 +21,10 @@ class VisualEncoder:
         self._siglip_processor = None
         self._beit = None
         self._beit_processor = None
-        if self.backend == "real":
-            self._load_real_models()
 
-    def _load_real_models(self) -> None:
+    def _ensure_real_runtime(self) -> None:
+        if hasattr(self, "_torch"):
+            return
         try:
             import torch
             from transformers import AutoImageProcessor, AutoModel, AutoProcessor
@@ -33,6 +34,9 @@ class VisualEncoder:
             ) from exc
 
         self._torch = torch
+        self._auto_image_processor = AutoImageProcessor
+        self._auto_model = AutoModel
+        self._auto_processor = AutoProcessor
         if torch.cuda.is_available():
             self._device = "cuda"
         elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
@@ -40,13 +44,21 @@ class VisualEncoder:
         else:
             self._device = "cpu"
 
-        self._siglip_processor = AutoProcessor.from_pretrained(self.settings.siglip_model_id)
-        self._siglip = AutoModel.from_pretrained(self.settings.siglip_model_id).to(self._device)
+    def _load_siglip(self) -> None:
+        if self._siglip is not None:
+            return
+        self._ensure_real_runtime()
+        self._siglip_processor = self._auto_processor.from_pretrained(self.settings.siglip_model_id)
+        self._siglip = self._auto_model.from_pretrained(self.settings.siglip_model_id).to(self._device)
         self._siglip.eval()
 
+    def _load_beit(self) -> None:
+        if self._beit is not None:
+            return
+        self._ensure_real_runtime()
         # BEiT is used as a practical stand-in if a BEiT-3 checkpoint is unavailable.
-        self._beit_processor = AutoImageProcessor.from_pretrained(self.settings.beit3_model_id)
-        self._beit = AutoModel.from_pretrained(self.settings.beit3_model_id).to(self._device)
+        self._beit_processor = self._auto_image_processor.from_pretrained(self.settings.beit3_model_id)
+        self._beit = self._auto_model.from_pretrained(self.settings.beit3_model_id).to(self._device)
         self._beit.eval()
 
     def encode_image(self, image_path: Path) -> tuple[list[float], list[float]]:
@@ -75,6 +87,8 @@ class VisualEncoder:
         )
 
     def _encode_real(self, image_path: Path) -> tuple[list[float], list[float]]:
+        self._load_siglip()
+        self._load_beit()
         image = Image.open(image_path).convert("RGB")
         torch = self._torch
 
@@ -92,11 +106,17 @@ class VisualEncoder:
         return siglip_vec, beit_vec
 
     def _encode_text_real(self, text: str) -> list[float]:
+        self._load_siglip()
         torch = self._torch
         with torch.no_grad():
             inputs = self._siglip_processor(
                 text=[text],
                 padding="max_length",
+                # SigLIP has a fixed, short text context (64 tokens for the
+                # configured checkpoint).  Query planners can produce a
+                # longer natural-language description, so trim it here rather
+                # than fail the entire search request.
+                truncation=True,
                 return_tensors="pt",
             )
             inputs = {k: v.to(self._device) for k, v in inputs.items()}
@@ -129,7 +149,9 @@ class VisualEncoder:
 
     @staticmethod
     def _hash_embed(seed: str, dim: int) -> list[float]:
-        rng = np.random.default_rng(abs(hash(seed)) % (2**32))
+        digest = hashlib.sha256(seed.encode("utf-8")).digest()
+        rng_seed = int.from_bytes(digest[:8], byteorder="big", signed=False)
+        rng = np.random.default_rng(rng_seed)
         vec = rng.normal(size=dim).astype(np.float32)
         vec /= np.linalg.norm(vec) + 1e-8
         return vec.tolist()
