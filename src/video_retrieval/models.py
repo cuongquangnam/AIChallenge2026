@@ -123,4 +123,27 @@ class Task2RetrievalResponse(BaseModel):
 
     question: str
     queries: dict[str, list[str]]
+    video_id: str | None = None
     groups: list[TemporalGroup]
+
+
+class Task2GroupVerdict(BaseModel):
+    is_major_award: bool
+    winner_count: int | None = None
+    evidence_frame_ids: list[int] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = ""
+
+
+class Task2BatchVerdict(Task2GroupVerdict):
+    """Gemini's decision after comparing all candidate time windows."""
+
+    selected_group_index: int | None = None
+
+
+class Task2AnswerResponse(BaseModel):
+    video_id: str | None = None
+    frame_id: int | None = None
+    answer: int | None = None
+    confidence: float = 0.0
+    verdicts: list[Task2GroupVerdict] = Field(default_factory=list)

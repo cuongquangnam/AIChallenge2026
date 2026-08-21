@@ -38,11 +38,15 @@ class SearchRequest(BaseModel):
 
 class Task2CandidatesRequest(BaseModel):
     video_id: str | None = None
+    video_dir: str | None = None
     candidates_per_query: int = Field(default=20, ge=1, le=100)
     group_limit: int = Field(default=10, ge=1, le=20)
     max_gap_sec: float = Field(default=10.0, ge=0.0, le=120.0)
     max_gap_frames: int = Field(default=10, ge=0, le=1000)
     context_radius_frames: int = Field(default=5, ge=0, le=100)
+    context_stride_frames: int = Field(default=1, ge=1, le=1000)
+    excluded_video_ids: list[str] = Field(default_factory=list)
+    allowed_video_ids: list[str] | None = None
 
 
 @app.get("/health")
@@ -140,5 +144,27 @@ def task2_candidates(body: Task2CandidatesRequest):
         max_gap_sec=body.max_gap_sec,
         max_gap_frames=body.max_gap_frames,
         context_radius_frames=body.context_radius_frames,
+        context_stride_frames=body.context_stride_frames,
+        excluded_video_ids=set(body.excluded_video_ids),
+        allowed_video_ids=set(body.allowed_video_ids) if body.allowed_video_ids is not None else None,
+        videos_dir=Path(body.video_dir) if body.video_dir else None,
+    )
+    return response.model_dump(mode="json")
+
+
+@app.post("/task2/answer")
+def task2_answer(body: Task2CandidatesRequest):
+    """Run retrieval plus Gemini verification for the Task 2 answer."""
+    response = SearchService(settings).answer_task2(
+        video_id=body.video_id,
+        videos_dir=Path(body.video_dir) if body.video_dir else None,
+        candidates_per_query=body.candidates_per_query,
+        group_limit=body.group_limit,
+        max_gap_sec=body.max_gap_sec,
+        max_gap_frames=body.max_gap_frames,
+        context_radius_frames=body.context_radius_frames,
+        context_stride_frames=body.context_stride_frames,
+        excluded_video_ids=set(body.excluded_video_ids),
+        allowed_video_ids=set(body.allowed_video_ids) if body.allowed_video_ids is not None else None,
     )
     return response.model_dump(mode="json")

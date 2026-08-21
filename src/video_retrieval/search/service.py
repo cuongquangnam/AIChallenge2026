@@ -5,7 +5,13 @@ from typing import Any
 
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.encoders.visual import VisualEncoder
-from video_retrieval.models import QueryPlan, SearchHit, SearchResponse, Task2RetrievalResponse
+from video_retrieval.models import (
+    QueryPlan,
+    SearchHit,
+    SearchResponse,
+    Task2AnswerResponse,
+    Task2RetrievalResponse,
+)
 from video_retrieval.search.planner import QueryPlanner
 from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
 from video_retrieval.storage.qdrant_store import QdrantStore
@@ -56,9 +62,16 @@ class SearchService:
         limit: int = 10,
         source: str | None = None,
         video_id: str | None = None,
+        strict: bool = False,
     ) -> SearchResponse:
         """Raw channel search used by fixed, task-specific retrieval queries."""
-        hits = self.es.search(query, limit=limit, source=source, video_id=video_id)
+        hits = self.es.search(
+            query,
+            limit=limit,
+            source=source,
+            video_id=video_id,
+            strict=strict,
+        )
         mode = f"text:{source}" if source else "text"
         return SearchResponse(query=query, mode=mode, hits=hits)
 
@@ -120,6 +133,10 @@ class SearchService:
         max_gap_sec: float = 10.0,
         max_gap_frames: int = 10,
         context_radius_frames: int = 5,
+        context_stride_frames: int = 1,
+        excluded_video_ids: set[str] | None = None,
+        allowed_video_ids: set[str] | None = None,
+        videos_dir: Path | None = None,
     ) -> Task2RetrievalResponse:
         """Retrieve evidence windows for the music-award Q&A task."""
         from video_retrieval.search.task2 import retrieve_task2_candidates
@@ -132,7 +149,54 @@ class SearchService:
             max_gap_sec=max_gap_sec,
             max_gap_frames=max_gap_frames,
             context_radius_frames=context_radius_frames,
+            context_stride_frames=context_stride_frames,
+            excluded_video_ids=excluded_video_ids,
+            allowed_video_ids=allowed_video_ids,
             manifests_dir=self.settings.data_dir / "manifests",
+            videos_dir=videos_dir,
+            context_output_dir=self.settings.data_dir / "task2_context" if videos_dir else None,
+        )
+
+    def answer_task2(
+        self,
+        *,
+        video_id: str | None = None,
+        videos_dir: Path | None = None,
+        candidates_per_query: int = 20,
+        group_limit: int = 10,
+        max_gap_sec: float = 10.0,
+        max_gap_frames: int = 10,
+        context_radius_frames: int = 5,
+        context_stride_frames: int = 1,
+        excluded_video_ids: set[str] | None = None,
+        allowed_video_ids: set[str] | None = None,
+    ) -> Task2AnswerResponse:
+        """Retrieve, verify, and choose the strongest Task 2 answer."""
+        candidates = self.retrieve_task2_candidates(
+            video_id=video_id,
+            videos_dir=videos_dir,
+            candidates_per_query=candidates_per_query,
+            group_limit=group_limit,
+            max_gap_sec=max_gap_sec,
+            max_gap_frames=max_gap_frames,
+            context_radius_frames=context_radius_frames,
+            context_stride_frames=context_stride_frames,
+            excluded_video_ids=excluded_video_ids,
+            allowed_video_ids=allowed_video_ids,
+        )
+        from video_retrieval.reasoning.gemini import GeminiTask2Verifier
+
+        verifier = GeminiTask2Verifier(self.settings)
+        group, verdict = verifier.verify_groups(candidates.groups)
+        if group is None or verdict.winner_count is None:
+            return Task2AnswerResponse(video_id=candidates.video_id, verdicts=[verdict])
+        frame_id = verdict.evidence_frame_ids[0] if verdict.evidence_frame_ids else group.center_frame_index
+        return Task2AnswerResponse(
+            video_id=group.video_id,
+            frame_id=frame_id,
+            answer=verdict.winner_count,
+            confidence=verdict.confidence,
+            verdicts=[verdict],
         )
 
     def search_planned(

@@ -97,6 +97,14 @@ def search_cmd(
 @app.command("task2-candidates")
 def task2_candidates_cmd(
     video_id: Optional[str] = typer.Option(None, help="Optional video to search within"),
+    video_dir: Optional[Path] = typer.Option(
+        None,
+        "--video-dir",
+        help="Source videos used to extract VLM context frames.",
+        dir_okay=True,
+        file_okay=False,
+        resolve_path=True,
+    ),
     candidates_per_query: int = typer.Option(20, min=1, max=100),
     group_limit: int = typer.Option(10, min=1, max=20),
     max_gap_sec: float = typer.Option(10.0, min=0.0),
@@ -112,6 +120,7 @@ def task2_candidates_cmd(
         max_gap_sec=max_gap_sec,
         max_gap_frames=max_gap_frames,
         context_radius_frames=context_radius_frames,
+        videos_dir=video_dir,
     )
     print(response)
 
