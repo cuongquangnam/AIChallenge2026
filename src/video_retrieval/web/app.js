@@ -19,6 +19,12 @@ const lightboxAddFrame = document.getElementById("lightbox-add-frame");
 const exportQueryIdEl = document.getElementById("export-query-id");
 const exportLimitEl = document.getElementById("export-limit");
 const exportBtn = document.getElementById("export-btn");
+const importBtn = document.getElementById("import-btn");
+const importResultsBtn = document.getElementById("import-results-btn");
+const importCsvEl = document.getElementById("import-csv");
+const moveFromEl = document.getElementById("move-from");
+const moveToEl = document.getElementById("move-to");
+const moveBtn = document.getElementById("move-btn");
 
 let activeHit = null;
 let lastPlan = null;
@@ -146,6 +152,90 @@ function exportCurrentList() {
   setStatus(
     `Exported ${rows.length} rows → ${anchor.download} (video_id,frame_idx).`
   );
+}
+
+function queryIdFromFilename(name) {
+  const base = String(name || "")
+    .replace(/^.*[\\/]/, "")
+    .replace(/\.csv$/i, "")
+    .trim();
+  return base.replace(/[^\w.-]+/g, "-") || "query";
+}
+
+function setImportBusy(busy) {
+  for (const btn of [importBtn, importResultsBtn, exportBtn, submitBtn]) {
+    if (!btn) continue;
+    btn.disabled = busy;
+  }
+  if (importBtn) {
+    importBtn.textContent = busy ? "Importing…" : "Import CSV";
+  }
+  if (importResultsBtn) {
+    importResultsBtn.textContent = busy ? "Importing…" : "Import CSV";
+  }
+}
+
+function openImportPicker() {
+  importCsvEl.value = "";
+  importCsvEl.click();
+}
+
+async function importSubmissionCsv(file) {
+  if (!file) return;
+  const queryId = queryIdFromFilename(file.name);
+  setImportBusy(true);
+  setStatus(`Importing ${file.name}…`);
+  try {
+    const csvText = await file.text();
+    if (!csvText.trim()) {
+      throw new Error("CSV file is empty.");
+    }
+    const response = await fetch("/api/submission/frames", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv_text: csvText, query_id: queryId }),
+    });
+    if (!response.ok) {
+      let detail = `Import failed (${response.status})`;
+      try {
+        const errBody = await response.json();
+        if (errBody?.detail) {
+          detail =
+            typeof errBody.detail === "string"
+              ? errBody.detail
+              : JSON.stringify(errBody.detail);
+        }
+      } catch {
+        /* keep default */
+      }
+      throw new Error(detail);
+    }
+    const payload = await response.json();
+    exportQueryIdEl.value = queryId;
+    renderHits(payload);
+    const errCount = (payload.errors || []).length;
+    const resolved = payload.resolved ?? (payload.hits || []).length;
+    const total = payload.total_rows ?? resolved;
+    if (!resolved) {
+      setStatus(
+        errCount
+          ? `Imported 0/${total} frames from ${file.name} (${errCount} errors).`
+          : `No frames could be resolved from ${file.name}.`,
+        true
+      );
+      return;
+    }
+    setStatus(
+      errCount
+        ? `Imported ${resolved}/${total} frames from ${file.name} (${errCount} missing).`
+        : `Imported ${resolved} frames from ${file.name}.`
+    );
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    setImportBusy(false);
+    importCsvEl.value = "";
+  }
 }
 
 function withHitId(hit) {
@@ -308,6 +398,7 @@ function renderPlan(plan) {
 
 function updateResultsMeta() {
   const added = resultHits.filter((hit) => hit.source === "user_capture").length;
+  const fromCsv = resultHits.filter((hit) => hit.source === "csv_import").length;
   const planBits = [];
   if (lastPlan?.visual) planBits.push("visual");
   if (lastPlan?.ocr) planBits.push("ocr");
@@ -316,10 +407,57 @@ function updateResultsMeta() {
     `${resultHits.length} frames`,
     `mode ${lastMode}`,
     planBits.length ? `channels ${planBits.join("+")}` : null,
+    fromCsv ? `${fromCsv} from csv` : null,
     added ? `${added} added` : null,
+    "drag or use Move frame #",
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function reorderHits(fromUid, toUid) {
+  if (!fromUid || !toUid || fromUid === toUid) return;
+  const fromIndex = resultHits.findIndex((hit) => hit._uid === fromUid);
+  const toIndex = resultHits.findIndex((hit) => hit._uid === toUid);
+  if (fromIndex < 0 || toIndex < 0) return;
+  moveHitAtIndex(fromIndex, toIndex);
+}
+
+function moveHitAtIndex(fromIndex, toIndex) {
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+  if (fromIndex >= resultHits.length || toIndex >= resultHits.length) return;
+  const [moved] = resultHits.splice(fromIndex, 1);
+  resultHits.splice(toIndex, 0, moved);
+  renderResultGrid();
+  setStatus(
+    `Moved #${fromIndex + 1} → #${toIndex + 1}: ${moved.video_id}, f${moved.frame_index ?? "?"}`
+  );
+}
+
+function moveHitByPosition() {
+  if (!resultHits.length) {
+    setStatus("No frames to move.", true);
+    return;
+  }
+  const fromPos = Number(moveFromEl.value);
+  const toPos = Number(moveToEl.value);
+  if (!Number.isInteger(fromPos) || !Number.isInteger(toPos)) {
+    setStatus("Enter whole numbers for both positions.", true);
+    return;
+  }
+  const max = resultHits.length;
+  if (fromPos < 1 || fromPos > max || toPos < 1 || toPos > max) {
+    setStatus(`Positions must be between 1 and ${max}.`, true);
+    return;
+  }
+  if (fromPos === toPos) {
+    setStatus(`Frame #${fromPos} is already at that position.`);
+    return;
+  }
+  moveHitAtIndex(fromPos - 1, toPos - 1);
+  moveFromEl.value = "";
+  moveToEl.value = "";
+  moveFromEl.focus();
 }
 
 function removeHit(uid) {
@@ -403,12 +541,51 @@ function renderResultGrid() {
   resultsEl.hidden = false;
   updateResultsMeta();
 
-  for (const hit of resultHits) {
+  for (const [index, hit] of resultHits.entries()) {
     const card = document.createElement("article");
     card.className = "card";
+    card.dataset.uid = hit._uid;
     if (hit.source === "user_capture") {
       card.classList.add("card-added");
     }
+
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "drag-handle";
+    handle.title = "Drag to reorder";
+    handle.setAttribute("aria-label", `Drag to reorder frame ${index + 1}`);
+    handle.textContent = `⋮⋮  ${index + 1}`;
+    handle.draggable = true;
+    handle.addEventListener("click", (event) => event.preventDefault());
+    handle.addEventListener("dragstart", (event) => {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", hit._uid);
+      card.classList.add("dragging");
+    });
+    handle.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      for (const el of gridEl.querySelectorAll(".drag-over")) {
+        el.classList.remove("drag-over");
+      }
+    });
+    card.appendChild(handle);
+
+    card.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", (event) => {
+      if (!card.contains(event.relatedTarget)) {
+        card.classList.remove("drag-over");
+      }
+    });
+    card.addEventListener("drop", (event) => {
+      event.preventDefault();
+      card.classList.remove("drag-over");
+      const fromUid = event.dataTransfer.getData("text/plain");
+      reorderHits(fromUid, hit._uid);
+    });
 
     const openBtn = document.createElement("button");
     openBtn.type = "button";
@@ -420,6 +597,7 @@ function renderResultGrid() {
       const img = document.createElement("img");
       img.className = "thumb";
       img.loading = "lazy";
+      img.draggable = false;
       img.src = thumbSrc;
       img.alt = `${hit.video_id} keyframe`;
       img.onerror = () => {
@@ -449,8 +627,9 @@ function renderResultGrid() {
       hit.shot_index != null ? `shot ${hit.shot_index}` : null,
       hit.role || null,
       hit.source === "user_capture" ? "added" : null,
+      hit.source === "csv_import" ? "csv" : null,
       time,
-      `score ${formatScore(hit.score)}`,
+      hit.source === "csv_import" ? null : `score ${formatScore(hit.score)}`,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -499,14 +678,18 @@ function renderHits(payload) {
   if (!resultHits.length) {
     resultsEl.hidden = true;
     planEl.hidden = true;
-    setStatus("No keyframes matched this query.");
+    if ((payload.mode || "") !== "csv") {
+      setStatus("No keyframes matched this query.");
+    }
     return;
   }
 
   resultsEl.hidden = false;
   renderPlan(lastPlan);
   renderResultGrid();
-  setStatus(`Found ${resultHits.length} keyframe${resultHits.length === 1 ? "" : "s"}.`);
+  if ((payload.mode || "") !== "csv") {
+    setStatus(`Found ${resultHits.length} keyframe${resultHits.length === 1 ? "" : "s"}.`);
+  }
 }
 
 lightboxClose.addEventListener("click", closeLightbox);
@@ -524,6 +707,25 @@ lightbox.addEventListener("click", (event) => {
 });
 
 exportBtn.addEventListener("click", exportCurrentList);
+importBtn.addEventListener("click", openImportPicker);
+if (importResultsBtn) {
+  importResultsBtn.addEventListener("click", openImportPicker);
+}
+importCsvEl.addEventListener("change", () => {
+  const file = importCsvEl.files?.[0];
+  if (file) {
+    importSubmissionCsv(file);
+  }
+});
+moveBtn.addEventListener("click", moveHitByPosition);
+for (const el of [moveFromEl, moveToEl]) {
+  el.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      moveHitByPosition();
+    }
+  });
+}
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();

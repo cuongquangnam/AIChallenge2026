@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Framefind — Video library</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <main class="shell">
+      <nav class="site-nav" aria-label="Primary">
+        <a href="/">Search frames</a>
+        <a href="/videos" aria-current="page">Video library</a>
+      </nav>
+
+      <header class="hero">
+        <p class="brand">Framefind</p>
+        <h1>Every clip in one place.</h1>
+        <p class="lede">
+          Open an L-series folder, filter by id, and watch full clips when you need to.
+        </p>
+
+        <form id="library-form" class="search-form library-form" autocomplete="off">
+          <label class="sr-only" for="library-query">Filter videos</label>
+          <input
+            id="library-query"
+            name="q"
+            type="search"
+            placeholder="Filter by video id… e.g. L21_V015"
+            spellcheck="false"
+          />
+          <div class="controls">
+            <p class="library-hint" id="library-meta">Loading library…</p>
+            <button type="submit" id="library-submit">Filter</button>
+          </div>
+        </form>
+      </header>
+
+      <section class="status" id="status" aria-live="polite"></section>
+
+      <section class="results" id="results">
+        <div class="folder-bar" id="folder-bar" hidden>
+          <button type="button" id="back-folders" class="back-folders-btn">← All folders</button>
+          <h2 id="folder-title"></h2>
+        </div>
+        <div class="grid video-grid" id="grid"></div>
+        <div class="library-more" id="library-more" hidden>
+          <button type="button" id="load-more" class="load-more-btn">Load more</button>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="lightbox" class="lightbox">
+      <div class="lightbox-bar">
+        <button type="button" class="lightbox-close" id="lightbox-close">Close</button>
+      </div>
+      <div class="lightbox-stage">
+        <video id="lightbox-video" controls playsinline></video>
+      </div>
+      <p id="lightbox-meta"></p>
+    </dialog>
+
+    <script src="/static/videos.js"></script>
+  </body>
+</html>

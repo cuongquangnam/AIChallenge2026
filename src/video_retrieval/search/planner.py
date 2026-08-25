@@ -22,8 +22,11 @@ Channels:
 - asr: quoted speech, "says"/"nói", spoken topics. Leave empty unless the query implies spoken/news narration content. Never invent speech.
 - visual: concise English scene description (people, objects, actions, places, clothing, counts, colors, camera framing).
 
+Language (strict):
+- ocr and asr MUST keep the query's original language. Do not translate them. Extract/trim only; preserve spelling, accents, and script.
+- visual MUST be English. Translate concrete nouns exactly (hổ=tiger, dứa=pineapple, dê=goat, cực quang=aurora). Never substitute similar animals/foods.
+
 Rules:
-- Translate concrete nouns exactly (hổ=tiger, dứa=pineapple, dê=goat, cực quang=aurora). Never substitute similar animals/foods.
 - Do not copy template phrases or example utterances into the output fields.
 - Weights must sum to 1.0. Unused channel string = "" and weight = 0.0.
 - Image/photo/frame/scene/picture requests, or a description of what is seen → visual 0.85-1.0.
@@ -42,7 +45,7 @@ người nói xin chào
 {{"ocr":"","asr":"xin chào","visual":"person speaking","weights":{{"ocr":0.0,"asr":0.7,"visual":0.3}}}}
 
 Mẩu tin về đàn hổ miền Nam vừa có thêm 3-6 hổ con quý hiếm
-{{"ocr":"","asr":"tiger cubs rare tigers southern Vietnam","visual":"rare tiger cubs in southern Vietnam, news report about a tiger family with several baby tigers","weights":{{"ocr":0.0,"asr":0.25,"visual":0.75}}}}
+{{"ocr":"","asr":"đàn hổ miền Nam hổ con quý hiếm","visual":"rare tiger cubs in southern Vietnam, news report about a tiger family with several baby tigers","weights":{{"ocr":0.0,"asr":0.25,"visual":0.75}}}}
 
 Query: {query}
 """

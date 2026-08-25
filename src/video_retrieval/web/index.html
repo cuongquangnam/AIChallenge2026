@@ -15,6 +15,11 @@
   <body>
     <div class="grain" aria-hidden="true"></div>
     <main class="shell">
+      <nav class="site-nav" aria-label="Primary">
+        <a href="/" aria-current="page">Search frames</a>
+        <a href="/videos">Video library</a>
+      </nav>
+
       <header class="hero">
         <p class="brand">Framefind</p>
         <h1>Ask in words. See the frames.</h1>
@@ -52,10 +57,16 @@
               </select>
             </label>
             <button type="submit" id="submit-btn">Search frames</button>
+            <button type="button" id="import-btn" class="import-btn">Import CSV</button>
+            <input
+              id="import-csv"
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+            />
           </div>
         </form>
       </header>
-
       <section class="status" id="status" aria-live="polite"></section>
 
       <section class="results" id="results" hidden>
@@ -64,30 +75,57 @@
             <h2>Keyframe matches</h2>
             <p id="results-meta"></p>
           </div>
-          <div class="export-bar">
-            <label class="field export-field">
-              <span>Query id</span>
-              <input
-                id="export-query-id"
-                type="text"
-                value="query-p1-1-kis"
-                placeholder="query-p1-1-kis"
-                spellcheck="false"
-              />
-            </label>
-            <label class="field export-field">
-              <span>Rows</span>
-              <select id="export-limit">
-                <option value="100" selected>100</option>
-                <option value="50">50</option>
-                <option value="10">10</option>
-                <option value="exact">Exact list</option>
-              </select>
-            </label>
-            <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+          <div class="results-tools">
+            <div class="reorder-bar" aria-label="Reorder frames by position">
+              <label class="field export-field reorder-field">
+                <span>Move frame #</span>
+                <input
+                  id="move-from"
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputmode="numeric"
+                  placeholder="e.g. 5"
+                />
+              </label>
+              <label class="field export-field reorder-field">
+                <span>to position</span>
+                <input
+                  id="move-to"
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputmode="numeric"
+                  placeholder="e.g. 1"
+                />
+              </label>
+              <button type="button" id="move-btn" class="move-btn">Move</button>
+            </div>
+            <div class="export-bar">
+              <label class="field export-field">
+                <span>Query id</span>
+                <input
+                  id="export-query-id"
+                  type="text"
+                  value="query-p1-1-kis"
+                  placeholder="query-p1-1-kis"
+                  spellcheck="false"
+                />
+              </label>
+              <label class="field export-field">
+                <span>Rows</span>
+                <select id="export-limit">
+                  <option value="100" selected>100</option>
+                  <option value="50">50</option>
+                  <option value="10">10</option>
+                  <option value="exact">Exact list</option>
+                </select>
+              </label>
+              <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+              <button type="button" id="import-results-btn" class="import-btn">Import CSV</button>
+            </div>
           </div>
-        </div>
-        <aside class="plan" id="plan" hidden>
+        </div>        <aside class="plan" id="plan" hidden>
           <h3>Planner</h3>
           <dl id="plan-body"></dl>
         </aside>

@@ -31,9 +31,9 @@ video-index index /path/to/video.mp4 --stages visual,ocr
 # 4) Search
 video-index search "your query" --mode mixed
 
-# 5) API
+# 5) API / Web UI (search + media only; index via CLI)
 video-index serve
-# POST /index  { "path": "/path/to/video.mp4" }
+# open http://localhost:8000
 # POST /search { "query": "...", "mode": "mixed" }
 ```
 
@@ -100,10 +100,13 @@ Each output file is `{query_id}.csv` with 100 lines of `video_id,frame_idx` (no 
 
 ```bash
 video-index serve
-# open http://localhost:8000
+# open http://localhost:8000          — keyframe search
+# open http://localhost:8000/videos   — browse / filter / watch all clips
 ```
 
-Submit a natural-language query; matching keyframes render as an image grid (`GET /media/keyframes/...`).
+Submit a natural-language query; matching keyframes render as an image grid (`GET /media/keyframes/...`). The **Video library** page lists files under `data/videos` (`GET /api/videos`) with poster thumbnails and in-browser playback.
+
+Indexing is CLI-only (`video-index index ...`); there is no HTTP `/index` endpoint.
 
 ## Index stages
 
