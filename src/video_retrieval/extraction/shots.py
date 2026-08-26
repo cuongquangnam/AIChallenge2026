@@ -59,11 +59,46 @@ def detect_shots_opencv(
     return shots
 
 
-def detect_shots_transnetv2(video_path: str) -> list[ShotSpan]:
-    """Optional TransNetV2 backend. Falls back to OpenCV if package is missing."""
+def detect_shots_transnetv2(
+    video_path: str,
+    *,
+    threshold: float = 0.5,
+    device: str = "auto",
+) -> list[ShotSpan]:
+    """TransNetV2 backend. Falls back to OpenCV if the package is missing."""
     try:
         from video_retrieval.extraction.transnet_v2 import predict_shots
 
-        return predict_shots(video_path)
-    except Exception:
+        return predict_shots(video_path, threshold=threshold, device=device)
+    except Exception as exc:
+        print(f"[transnet] failed ({exc}); falling back to OpenCV", flush=True)
         return detect_shots_opencv(video_path)
+
+
+def subdivide_long_shots(
+    spans: list[ShotSpan],
+    *,
+    fps: float,
+    max_shot_sec: float,
+) -> list[ShotSpan]:
+    """Split spans longer than ``max_shot_sec`` into equal-ish chunks.
+
+    Keeps start/middle keyframe spacing bounded so long mis-detected
+    (or truly long) scenes don't leave multi-minute blind spots.
+    """
+    if max_shot_sec <= 0 or fps <= 0:
+        return list(spans)
+
+    max_frames = max(1, int(round(max_shot_sec * fps)))
+    out: list[ShotSpan] = []
+    for span in spans:
+        length = span.end_frame - span.start_frame + 1
+        if length <= max_frames:
+            out.append(span)
+            continue
+        start = span.start_frame
+        while start <= span.end_frame:
+            end = min(span.end_frame, start + max_frames - 1)
+            out.append(ShotSpan(start_frame=start, end_frame=end))
+            start = end + 1
+    return out

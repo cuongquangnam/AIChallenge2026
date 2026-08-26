@@ -89,10 +89,43 @@ class VisualEncoder:
         return self._hash_embed(text, self.settings.siglip_dim)
 
     def encode_keyframes(self, keyframes: list[KeyFrame]) -> list[VisualEmbedding]:
-        return [
-            VisualEmbedding(keyframe=kf, siglip=self.encode_image(kf.path))
-            for kf in keyframes
-        ]
+        if not keyframes:
+            return []
+        if self.backend != "real":
+            return [
+                VisualEmbedding(keyframe=kf, siglip=self.encode_image(kf.path))
+                for kf in keyframes
+            ]
+        return self._encode_keyframes_batched(keyframes)
+
+    def _encode_keyframes_batched(self, keyframes: list[KeyFrame]) -> list[VisualEmbedding]:
+        batch_size = max(int(self.settings.siglip_batch_size or 1), 1)
+        total = len(keyframes)
+        out: list[VisualEmbedding] = []
+        torch = self._torch
+        for start in range(0, total, batch_size):
+            batch = keyframes[start : start + batch_size]
+            images = [Image.open(kf.path).convert("RGB") for kf in batch]
+            with torch.no_grad():
+                inputs = self._siglip_processor(images=images, return_tensors="pt")
+                inputs = {k: v.to(self._device) for k, v in inputs.items()}
+                feats = self._as_embedding_tensor(
+                    self._siglip.get_image_features(**inputs)
+                )
+                if feats.ndim == 1:
+                    feats = feats.unsqueeze(0)
+                feats = torch.nn.functional.normalize(feats, dim=-1)
+                vectors = feats.detach().cpu().tolist()
+            for kf, vec in zip(batch, vectors, strict=True):
+                out.append(VisualEmbedding(keyframe=kf, siglip=list(vec)))
+            done = min(start + len(batch), total)
+            if done == len(batch) or done % max(batch_size * 4, 64) == 0 or done == total:
+                print(
+                    f"SigLIP {done}/{total} "
+                    f"(batch={batch_size}, device={self._device})",
+                    flush=True,
+                )
+        return out
 
     def _encode_mock(self, image_path: Path) -> list[float]:
         seed = f"{image_path.resolve()}:{image_path.stat().st_size}:siglip"
@@ -155,18 +188,27 @@ class VisualEncoder:
 
     def _to_unit_vector(self, features: Any) -> list[float]:
         torch = self._torch
-        tensor = features if torch.is_tensor(features) else self._as_embedding_tensor(features)
+        tensor = self._as_embedding_tensor(features)
         if tensor.ndim == 1:
             tensor = tensor.unsqueeze(0)
         vec = torch.nn.functional.normalize(tensor, dim=-1)[0]
         return vec.detach().cpu().tolist()
 
     def _as_embedding_tensor(self, features: Any):
+        """Normalize SigLIP feature outputs across transformers versions.
+
+        Older builds return a bare tensor from ``get_*_features``. Newer ones
+        may return ``BaseModelOutputWithPooling`` (or similar) instead.
+        """
         torch = self._torch
+        if torch.is_tensor(features):
+            return features
         if hasattr(features, "pooler_output") and features.pooler_output is not None:
             return features.pooler_output
         if hasattr(features, "last_hidden_state") and features.last_hidden_state is not None:
             return features.last_hidden_state[:, 0]
+        if hasattr(features, "embeddings") and features.embeddings is not None:
+            return features.embeddings
         raise TypeError(f"Unsupported feature type: {type(features)!r}")
 
     @staticmethod

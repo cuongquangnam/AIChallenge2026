@@ -278,11 +278,18 @@ class VideoIndexer:
             shots, audio = self._load_extracted(video_id, stored_video)
 
         if need_shots and not shots:
+            if not reuse_extract:
+                self._clear_keyframe_dir(video_id)
             shots = extract_keyframes(
                 stored_video,
                 self.settings.keyframes_dir,
                 video_id,
                 shot_backend=self.settings.shot_backend,
+                max_shot_sec=self.settings.max_shot_sec,
+                opencv_threshold=self.settings.opencv_shot_threshold,
+                opencv_min_shot_len=self.settings.opencv_min_shot_len,
+                transnet_threshold=self.settings.transnet_threshold,
+                transnet_device=self.settings.transnet_device,
             )
         if need_audio and (audio is None or not audio.path.exists()):
             audio = extract_audio(stored_video, self.settings.audio_dir, video_id)
@@ -291,6 +298,12 @@ class VideoIndexer:
         if need_shots and not shots:
             raise FileNotFoundError(f"No keyframes for {video_id}")
         return shots, audio
+
+    def _clear_keyframe_dir(self, video_id: str) -> None:
+        folder = self.settings.keyframes_dir / video_id
+        if folder.is_dir():
+            shutil.rmtree(folder)
+            print(f"Cleared keyframes for {video_id}", flush=True)
 
     def _load_extracted(
         self,

@@ -5,7 +5,11 @@ from pathlib import Path
 
 import cv2
 
-from video_retrieval.extraction.shots import detect_shots_opencv, detect_shots_transnetv2
+from video_retrieval.extraction.shots import (
+    detect_shots_opencv,
+    detect_shots_transnetv2,
+    subdivide_long_shots,
+)
 from video_retrieval.models import FrameRole, KeyFrame, Shot
 
 _KEYFRAME_NAME = re.compile(
@@ -20,31 +24,54 @@ def extract_keyframes(
     output_dir: Path,
     video_id: str,
     shot_backend: str = "opencv",
+    *,
+    max_shot_sec: float = 10.0,
+    opencv_threshold: float = 0.45,
+    opencv_min_shot_len: int = 8,
+    transnet_threshold: float = 0.5,
+    transnet_device: str = "auto",
 ) -> list[Shot]:
-    """Detect shots and save start / middle / end keyframes per shot."""
+    """Detect shots and save start / middle keyframes (end only on the last shot).
+
+    Shot *i*'s end frame is usually adjacent to shot *i+1*'s start, so saving
+    both is near-duplicate. Keep ``end`` only for the final shot so the video
+    tail is still covered.
+    """
     video_path = Path(video_path)
     out_root = Path(output_dir) / video_id
     out_root.mkdir(parents=True, exist_ok=True)
 
     if shot_backend == "transnetv2":
-        spans = detect_shots_transnetv2(str(video_path))
+        spans = detect_shots_transnetv2(
+            str(video_path),
+            threshold=transnet_threshold,
+            device=transnet_device,
+        )
     else:
-        spans = detect_shots_opencv(str(video_path))
+        spans = detect_shots_opencv(
+            str(video_path),
+            threshold=opencv_threshold,
+            min_shot_len=opencv_min_shot_len,
+        )
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
 
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+    spans = subdivide_long_shots(spans, fps=fps, max_shot_sec=max_shot_sec)
     shots: list[Shot] = []
+    last_index = len(spans) - 1
 
     for shot_index, span in enumerate(spans):
         mid = (span.start_frame + span.end_frame) // 2
         role_to_frame = {
             FrameRole.START: span.start_frame,
             FrameRole.MIDDLE: mid,
-            FrameRole.END: span.end_frame,
         }
+        # Final shot only: end is not duplicated by a following start.
+        if shot_index == last_index and span.end_frame not in role_to_frame.values():
+            role_to_frame[FrameRole.END] = span.end_frame
         keyframes: list[KeyFrame] = []
         for role, frame_index in role_to_frame.items():
             frame = _read_frame(cap, frame_index)

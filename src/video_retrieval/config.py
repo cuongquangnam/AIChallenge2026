@@ -23,9 +23,19 @@ class Settings(BaseSettings):
 
     visual_backend: str = "mock"  # mock | real
     ocr_backend: str = "mock"  # mock | gemini | rapidocr
-    asr_backend: str = "mock"  # mock | whisper
+    asr_backend: str = "mock"  # mock | whisper | faster_whisper
     shot_backend: str = "opencv"  # opencv | transnetv2
     ocr_workers: int = 4
+
+    # Mac-efficient indexing knobs
+    siglip_batch_size: int = 16
+    max_shot_sec: float = 10.0  # subdivide longer shots before keyframing
+    opencv_shot_threshold: float = 0.45
+    opencv_min_shot_len: int = 8
+    transnet_threshold: float = 0.5
+    transnet_device: str = "auto"  # auto | mps | cpu | cuda
+    faster_whisper_compute_type: str = "int8"  # int8 | float16 | float32
+    faster_whisper_cpu_threads: int = 0  # 0 = auto (os.cpu_count)
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"

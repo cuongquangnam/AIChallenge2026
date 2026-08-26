@@ -55,10 +55,10 @@ src/video_retrieval/
 
 | Component | Env | Values |
 |-----------|-----|--------|
-| Shot detection | `SHOT_BACKEND` | `opencv` (default) \| `transnetv2` |
-| Visual encoders | `VISUAL_BACKEND` | `mock` \| `real` (uses Apple MPS on Mac) |
+| Shot detection | `SHOT_BACKEND` | `opencv` (default) \| `transnetv2` (PyTorch; MPS on Mac) |
+| Visual encoders | `VISUAL_BACKEND` | `mock` \| `real` (uses Apple MPS on Mac; batched via `SIGLIP_BATCH_SIZE`) |
 | OCR | `OCR_BACKEND` | `mock` \| `rapidocr` (on-device) \| `gemini` |
-| ASR | `ASR_BACKEND` | `mock` \| `whisper` |
+| ASR | `ASR_BACKEND` | `mock` \| `whisper` \| `faster_whisper` (recommended on Mac) |
 | Query planner | `QUERY_PLANNER` | `heuristic` \| `ollama` (local LLM) \| `auto` \| `gemini` |
 
 Run the whole pipeline on a Mac with no Gemini key:
@@ -140,6 +140,33 @@ Overnight / long run on videos already in `data/videos` (Mac stays awake, videos
 # add --rerun
 STAGES=ocr,asr ./scripts/index_existing_videos.sh --rerun
 ```
+
+### Mac full reindex (TransNet + dense keyframes)
+
+For Apple Silicon (~873 videos / ~131h of media), use the optimized path:
+
+```bash
+pip install -e ".[ml]"   # adds transnetv2-pytorch + faster-whisper
+docker compose up -d
+
+# Daytime (fits in <1 day): shots + SigLIP + OCR
+STAGES=visual,ocr ./scripts/reindex_transnet_mac.sh
+
+# Overnight ASR only (reuses keyframes/audio)
+STAGES=asr REEXTRACT=0 ./scripts/reindex_transnet_mac.sh
+```
+
+What it enables:
+
+| Knob | Default | Effect |
+|------|---------|--------|
+| `SHOT_BACKEND=transnetv2` | TransNet on MPS | Better cuts than OpenCV histogram |
+| `MAX_SHOT_SEC=10` | subdivide long shots | No multi-minute blind spots |
+| `SIGLIP_BATCH_SIZE=16` | batched encode on MPS | Much faster than 1-image-at-a-time |
+| `ASR_BACKEND=faster_whisper` | CPU int8 | ~5–10× realtime vs openai-whisper |
+| `OCR_WORKERS=6` | parallel RapidOCR | Uses multi-core CPU |
+
+Smoke-test first: `MAX_VIDEOS=2 ./scripts/reindex_transnet_mac.sh`
 
 `QUERY_PLANNER=auto` uses Gemini when `GEMINI_API_KEY` is set, otherwise the full query is sent to the selected channel(s).
 
