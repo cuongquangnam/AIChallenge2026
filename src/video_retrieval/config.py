@@ -35,6 +35,19 @@ class Settings(BaseSettings):
     siglip_model_id: str = "google/siglip-base-patch16-224"
     beit3_model_id: str = "microsoft/beit-base-patch16-224"
 
+    # Q&A uses Gemini by default (same GEMINI_API_KEY as OCR / planner).
+    qa_llm_backend: str = "gemini"  # gemini | none
+    qa_retrieval_limit: int = 50
+    qa_group_count: int = 6
+    qa_frame_radius: int = 2
+    qa_frame_stride: int = 1
+    qa_min_center_gap: int = 10
+
+    trake_event_limit: int = 80
+    trake_top_videos: int = 8
+    trake_top_chains: int = 5
+    trake_candidates_per_event: int = 30
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 

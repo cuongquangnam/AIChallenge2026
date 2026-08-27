@@ -333,6 +333,13 @@ def test_gemini_generation_config_for_v3_models() -> None:
 
 
 @pytest.mark.unit
+def test_gemini_generation_config_skips_pro_minimal() -> None:
+    config = _gemini_generation_config("gemini-3.1-pro-preview", json_response=True)
+    assert config is not None
+    assert config.thinking_config is None
+
+
+@pytest.mark.unit
 def test_gemini_generation_config_skips_older_models() -> None:
     assert _gemini_generation_config("gemini-2.0-flash", json_response=False) is None
 

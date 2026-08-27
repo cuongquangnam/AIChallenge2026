@@ -18,3 +18,7 @@ build/
 .idea/
 .vscode/
 test_output/
+data_transnet/
+media-info/
+submissions/
+qa_crops/

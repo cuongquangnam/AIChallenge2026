@@ -8,7 +8,9 @@ from rich import print
 
 from video_retrieval.config import get_settings
 from video_retrieval.pipeline.indexer import VideoIndexer, normalize_stages
+from video_retrieval.search.kis import load_queries, package_kis_zip, run_kis_batch
 from video_retrieval.search.service import SearchService
+from video_retrieval.search.trake import TrakeService
 
 app = typer.Typer(help="Index and search videos (keyframes + OCR/ASR).")
 
@@ -94,14 +96,103 @@ def search_cmd(
     print(response)
 
 
+@app.command("kis")
+def kis_cmd(
+    queries: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="JSON object mapping query_id -> query text (e.g. queries/kis_p1.json)",
+    ),
+    out_dir: Path = typer.Option(
+        Path("submissions/kis_p1"),
+        "--out-dir",
+        help="Directory for {query_id}.csv files (video_id,frame_idx).",
+        resolve_path=True,
+    ),
+    mode: str = typer.Option("mixed", help="visual | asr | ocr | mixed"),
+    limit: int = typer.Option(100, min=1, max=100, help="Rows per CSV (KIS expects 100)."),
+    data_dir: Optional[Path] = _data_dir_option(),
+    quiet: bool = typer.Option(False, "--quiet", help="Less progress output."),
+    zip_path: Optional[Path] = typer.Option(
+        None,
+        "--zip",
+        help="Also write a clean submission zip (no __MACOSX / ._ files).",
+        resolve_path=True,
+    ),
+) -> None:
+    """Run Textual KIS queries and write one 100-line CSV per query."""
+    if mode not in {"visual", "asr", "ocr", "mixed"}:
+        raise typer.BadParameter("mode must be one of: visual, asr, ocr, mixed")
+    settings = get_settings(data_dir=data_dir)
+    query_map = load_queries(queries)
+    print(
+        f"planner={settings.query_planner} model={settings.gemini_model} "
+        f"queries={len(query_map)} out={out_dir}"
+    )
+    service = SearchService(settings)
+    written = run_kis_batch(
+        service,
+        query_map,
+        out_dir,
+        mode=mode,
+        limit=limit,
+        progress=not quiet,
+    )
+    print(f"done: wrote {len(written)} CSV files to {out_dir}")
+    if zip_path is not None:
+        packaged = package_kis_zip(out_dir, zip_path)
+        print(f"zip: {packaged}")
+
+
+@app.command("kis-zip")
+def kis_zip_cmd(
+    csv_dir: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+        help="Directory containing query-*.csv files",
+    ),
+    zip_path: Optional[Path] = typer.Option(
+        None,
+        "--zip",
+        help="Output zip path (default: <csv_dir>/submission.zip)",
+        resolve_path=True,
+    ),
+) -> None:
+    """Package KIS CSVs into a clean UTF-8 zip (no macOS AppleDouble junk)."""
+    out = zip_path or (csv_dir / "submission.zip")
+    packaged = package_kis_zip(csv_dir, out)
+    print(f"zip: {packaged}")
+
+
+@app.command("trake")
+def trake_cmd(
+    query: str = typer.Argument(..., help="Full TRAKE query with E1, E2, … events"),
+    top_chains: int = typer.Option(5, min=1, max=20),
+    data_dir: Optional[Path] = _data_dir_option(),
+) -> None:
+    """Parse TRAKE events and print aligned video/frame chains."""
+    result = TrakeService(get_settings(data_dir=data_dir)).run(
+        query, top_chains=top_chains
+    )
+    print(result)
+
+
 @app.command("serve")
 def serve_cmd(
     host: Optional[str] = None,
     port: Optional[int] = None,
     data_dir: Optional[Path] = _data_dir_option(),
 ) -> None:
+    import logging
+
     import uvicorn
 
+    logging.getLogger("video_retrieval").setLevel(logging.INFO)
     settings = get_settings(data_dir=data_dir)
     from video_retrieval import api as api_module
 
@@ -112,6 +203,7 @@ def serve_cmd(
         host=host or settings.api_host,
         port=port or settings.api_port,
         reload=False,
+        log_level="info",
     )
 
 

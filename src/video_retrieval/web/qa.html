@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Framefind — QA</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <main class="shell">
+      <nav class="site-nav" aria-label="Primary">
+        <a href="/">Search frames</a>
+        <a href="/videos">Video library</a>
+        <a href="/kis">KIS</a>
+        <a href="/qa" aria-current="page">QA</a>
+        <a href="/trake">TRAKE</a>
+      </nav>
+
+      <header class="hero">
+        <p class="brand">Framefind · QA</p>
+        <h1>Question answering</h1>
+        <p class="lede">
+          Retrieve evidence frames, answer with Gemini, then export
+          <code>video_id,frame_id,answer</code>.
+        </p>
+
+        <form id="qa-form" class="search-form" autocomplete="off">
+          <label class="sr-only" for="question">QA question</label>
+          <textarea
+            id="question"
+            name="question"
+            rows="4"
+            placeholder="Paste a Visual / Textual QA query…"
+            required
+          ></textarea>
+          <div class="controls">
+            <label class="field export-field">
+              <span>Query id</span>
+              <input
+                id="query-id"
+                type="text"
+                value="query-p1-3-qa"
+                placeholder="query-p1-3-qa"
+                spellcheck="false"
+              />
+            </label>
+            <label class="field">
+              <span>Results</span>
+              <select id="limit" name="limit">
+                <option value="10">10</option>
+                <option value="24" selected>24</option>
+                <option value="100">100</option>
+              </select>
+            </label>
+            <button type="submit" id="submit-btn">Run QA</button>
+            <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+          </div>
+        </form>
+      </header>
+
+      <section class="status" id="status" aria-live="polite"></section>
+
+      <section class="results" id="results" hidden>
+        <div class="results-head">
+          <div>
+            <h2>Answer</h2>
+            <p id="results-meta"></p>
+          </div>
+        </div>
+
+        <div class="qa-answer-panel">
+          <label class="field">
+            <span>Video id</span>
+            <input id="answer-video" type="text" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span>Frame id</span>
+            <input id="answer-frame" type="number" min="0" step="1" />
+          </label>
+          <label class="field qa-answer-field">
+            <span>Answer (editable)</span>
+            <input id="answer-text" type="text" />
+          </label>
+        </div>
+
+        <aside class="plan" id="descriptions" hidden>
+          <h3>Retrieval descriptions</h3>
+          <ul id="description-list"></ul>
+        </aside>
+
+        <div class="qa-evidence" id="evidence">
+          <article class="qa-evidence-card" id="evidence-card" hidden>
+            <button type="button" class="thumb-btn" id="evidence-thumb-btn">
+              <img id="evidence-img" alt="Evidence frame" />
+            </button>
+            <div>
+              <h3>Selected evidence</h3>
+              <p id="evidence-meta"></p>
+              <button type="button" id="play-evidence" class="move-btn" hidden>
+                Play from evidence
+              </button>
+            </div>
+          </article>
+        </div>
+
+        <h2 class="section-title">Ranked answers</h2>
+        <div class="grid" id="hits-grid"></div>
+
+        <h2 class="section-title">Candidate groups</h2>
+        <div class="qa-groups" id="groups"></div>
+      </section>
+    </main>
+
+    <dialog id="lightbox" class="lightbox">
+      <div class="lightbox-bar">
+        <button type="button" class="lightbox-close" id="lightbox-close">Close</button>
+        <button type="button" class="lightbox-open-video" id="lightbox-open-video" hidden>
+          Play from this moment
+        </button>
+      </div>
+      <div class="lightbox-stage">
+        <img id="lightbox-img" alt="" />
+        <video id="lightbox-video" controls playsinline hidden></video>
+      </div>
+      <p id="lightbox-meta"></p>
+    </dialog>
+
+    <script src="/static/qa.js"></script>
+  </body>
+</html>

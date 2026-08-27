@@ -99,3 +99,75 @@ class SearchResponse(BaseModel):
     mode: str
     hits: list[SearchHit]
     plan: QueryPlan | None = None
+
+
+class QAFrame(BaseModel):
+    frame_id: int
+    timestamp_sec: float
+    path: Path
+
+
+class QAFrameGroup(BaseModel):
+    video_id: str
+    center_frame_id: int
+    retrieval_score: float
+    frames: list[QAFrame]
+    sources: list[str] = Field(default_factory=list)
+
+
+class QAResult(BaseModel):
+    question: str
+    video_id: str
+    frame_id: int
+    answer: str
+    descriptions: list[str] = Field(default_factory=list)
+    frame_groups: list[QAFrameGroup] = Field(default_factory=list)
+    hits: list["QAAnswerHit"] = Field(default_factory=list)
+
+
+class QAAnswerHit(BaseModel):
+    """One ranked QA submission row: video_id, frame_id, answer."""
+
+    video_id: str
+    frame_id: int
+    answer: str
+    score: float = 0.0
+    timestamp_sec: float | None = None
+    image_url: str | None = None
+    video_url: str | None = None
+    source: str = "qa"
+
+
+class TrakeEventPlan(BaseModel):
+    event_id: str
+    ocr: str = ""
+    asr: str = ""
+    visual: str = ""
+
+
+class TrakePlan(BaseModel):
+    context: str = ""
+    events: list[TrakeEventPlan] = Field(default_factory=list)
+
+
+class TrakeEventHit(BaseModel):
+    event_id: str
+    frame_index: int
+    score: float = 0.0
+    timestamp_sec: float | None = None
+    keyframe_path: str | None = None
+    text: str | None = None
+    source: str = "trake"
+
+
+class TrakeChain(BaseModel):
+    video_id: str
+    score: float
+    events: list[TrakeEventHit] = Field(default_factory=list)
+
+
+class TrakeResult(BaseModel):
+    query: str
+    plan: TrakePlan | None = None
+    chains: list[TrakeChain] = Field(default_factory=list)
+    csv_row: str = ""

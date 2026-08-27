@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from video_retrieval.config import Settings
 from video_retrieval.models import QueryPlan
+from video_retrieval.text.gemini_logging import log_gemini_failure
+
+logger = logging.getLogger(__name__)
 
 _PLAN_PROMPT = """\
 Split a video-search query into three retrieval channels.
 Return JSON only, no markdown:
-{
+{{
   "ocr": "words likely shown on screen (logos, captions, signs, names)",
   "asr": "words likely spoken in the audio",
   "visual": "English visual scene description for image-text embedding search",
-  "weights": {"ocr": 0.0-1.0, "asr": 0.0-1.0, "visual": 0.0-1.0}
-}
+  "weights": {{"ocr": 0.0-1.0, "asr": 0.0-1.0, "visual": 0.0-1.0}}
+}}
 Rules:
 - Use empty string if a channel is not relevant.
 - Keep ocr/asr in the query language; put visual in concise English.
@@ -35,17 +39,28 @@ class QueryPlanner:
 
     def _init_gemini(self) -> None:
         if not self.settings.gemini_api_key:
+            logger.warning(
+                "Gemini query planner disabled: GEMINI_API_KEY is empty; using heuristic plans"
+            )
             self.backend = "heuristic"
             return
         try:
             from google import genai
             from google.genai import types
-        except ImportError:
+        except ImportError as exc:
+            logger.error(
+                "Gemini query planner disabled: google-genai import failed (%s); using heuristic plans",
+                exc,
+            )
             self.backend = "heuristic"
             return
 
         self._client = genai.Client(api_key=self.settings.gemini_api_key)
         self._types = types
+        logger.info(
+            "Gemini query planner ready (model=%s)",
+            self.settings.gemini_model,
+        )
 
     def plan(self, query: str) -> QueryPlan:
         query = query.strip()
@@ -56,24 +71,39 @@ class QueryPlanner:
 
         try:
             return self._plan_gemini(query)
-        except Exception:
+        except Exception as exc:
+            log_gemini_failure(
+                component="query planner",
+                model=self.settings.gemini_model,
+                exc=exc,
+                query=query,
+                fallback="heuristic plan (copy query to ocr/asr/visual)",
+            )
             return heuristic_plan(query)
 
     def _plan_gemini(self, query: str) -> QueryPlan:
-        from google.genai import types
+        from video_retrieval.text.gemini_config import gemini_generate_config
 
         kwargs: dict = {
             "model": self.settings.gemini_model,
             "contents": _PLAN_PROMPT.format(query=query),
         }
-        config_kwargs: dict = {"response_mime_type": "application/json"}
-        if self.settings.gemini_model.startswith("gemini-3"):
-            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
-        kwargs["config"] = types.GenerateContentConfig(**config_kwargs)
+        config = gemini_generate_config(self.settings.gemini_model, json_response=True)
+        if config is not None:
+            kwargs["config"] = config
 
         response = self._client.models.generate_content(**kwargs)
         raw = (response.text or "").strip()
-        return parse_plan(raw, fallback_query=query)
+        plan = parse_plan(raw, fallback_query=query)
+        if not (plan.ocr or plan.asr or plan.visual):
+            logger.warning(
+                "Gemini query planner returned empty channels (model=%s); "
+                "falling back to heuristic. raw_response=%r",
+                self.settings.gemini_model,
+                raw[:800],
+            )
+            return heuristic_plan(query)
+        return plan
 
 
 def heuristic_plan(query: str) -> QueryPlan:

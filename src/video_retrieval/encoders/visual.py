@@ -97,6 +97,8 @@ class VisualEncoder:
             inputs = self._siglip_processor(
                 text=[text],
                 padding="max_length",
+                truncation=True,
+                max_length=64,
                 return_tensors="pt",
             )
             inputs = {k: v.to(self._device) for k, v in inputs.items()}

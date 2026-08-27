@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Framefind — Textual KIS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <main class="shell">
+      <nav class="site-nav" aria-label="Primary">
+        <a href="/">Search frames</a>
+        <a href="/videos">Video library</a>
+        <a href="/kis" aria-current="page">KIS</a>
+        <a href="/qa">QA</a>
+        <a href="/trake">TRAKE</a>
+      </nav>
+
+      <header class="hero">
+        <p class="brand">Framefind · KIS</p>
+        <h1>Textual known-item search</h1>
+        <p class="lede">
+          Find the described moment, reorder candidates, then export
+          <code>video_id,frame_idx</code> CSV (100 rows).
+        </p>
+
+        <form id="search-form" class="search-form" autocomplete="off">
+          <label class="sr-only" for="query">KIS query</label>
+          <textarea
+            id="query"
+            name="query"
+            rows="4"
+            placeholder="Paste a Round-1/2 Textual KIS query…"
+            required
+          ></textarea>
+
+          <div class="controls">
+            <label class="field">
+              <span>Mode</span>
+              <select id="mode" name="mode">
+                <option value="mixed" selected>Mixed</option>
+                <option value="visual">Visual</option>
+                <option value="ocr">OCR</option>
+                <option value="asr">ASR</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Results</span>
+              <select id="limit" name="limit">
+                <option value="24">24</option>
+                <option value="48">48</option>
+                <option value="100" selected>100</option>
+              </select>
+            </label>
+            <button type="submit" id="submit-btn">Run KIS</button>
+            <button type="button" id="import-btn" class="import-btn">Import CSV</button>
+            <input
+              id="import-csv"
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+            />
+          </div>
+        </form>
+      </header>
+      <section class="status" id="status" aria-live="polite"></section>
+
+      <section class="results" id="results" hidden>
+        <div class="results-head">
+          <div>
+            <h2>KIS candidates</h2>
+            <p id="results-meta"></p>
+          </div>
+          <div class="results-tools">
+            <div class="reorder-bar" aria-label="Reorder frames by position">
+              <label class="field export-field reorder-field">
+                <span>Move frame #</span>
+                <input
+                  id="move-from"
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputmode="numeric"
+                  placeholder="e.g. 5"
+                />
+              </label>
+              <label class="field export-field reorder-field">
+                <span>to position</span>
+                <input
+                  id="move-to"
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputmode="numeric"
+                  placeholder="e.g. 1"
+                />
+              </label>
+              <button type="button" id="move-btn" class="move-btn">Move</button>
+            </div>
+            <div class="export-bar">
+              <label class="field export-field">
+                <span>Query id</span>
+                <input
+                  id="export-query-id"
+                  type="text"
+                  value="query-p1-1-kis"
+                  placeholder="query-p1-1-kis"
+                  spellcheck="false"
+                />
+              </label>
+              <label class="field export-field">
+                <span>Rows</span>
+                <select id="export-limit">
+                  <option value="100" selected>100</option>
+                  <option value="50">50</option>
+                  <option value="10">10</option>
+                  <option value="exact">Exact list</option>
+                </select>
+              </label>
+              <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+              <button type="button" id="import-results-btn" class="import-btn">Import CSV</button>
+            </div>
+          </div>
+        </div>
+        <aside class="plan" id="plan" hidden>
+          <h3>Planner</h3>
+          <dl id="plan-body"></dl>
+        </aside>
+        <div class="grid" id="grid"></div>
+      </section>
+    </main>
+
+    <dialog id="lightbox" class="lightbox">
+      <div class="lightbox-bar">
+        <button type="button" class="lightbox-close" id="lightbox-close">Close</button>
+        <button type="button" class="lightbox-open-video" id="lightbox-open-video" hidden>
+          Play from this moment
+        </button>
+        <button type="button" class="lightbox-add-frame" id="lightbox-add-frame" hidden>
+          Add current frame
+        </button>
+      </div>
+      <div class="lightbox-stage">
+        <img id="lightbox-img" alt="" />
+        <video id="lightbox-video" controls playsinline hidden></video>
+      </div>
+      <p id="lightbox-meta"></p>
+    </dialog>
+
+    <script src="/static/kis.js"></script>
+  </body>
+</html>
