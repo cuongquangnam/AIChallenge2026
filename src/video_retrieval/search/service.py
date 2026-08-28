@@ -6,6 +6,7 @@ from typing import Any
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.models import QueryPlan, SearchHit, SearchResponse
+from video_retrieval.query_stages import log_query_stage
 from video_retrieval.search.planner import QueryPlanner
 from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
 from video_retrieval.storage.qdrant_store import QdrantStore
@@ -105,6 +106,7 @@ class SearchService:
         limit: int = 10,
         vector_name: str = "siglip",
     ) -> SearchResponse:
+        log_query_stage("search", "plan_query", mode="mixed")
         plan = self.planner.plan(query)
         channel_limit = max(limit * _CHANNEL_LIMIT_FACTOR, limit)
 
@@ -112,16 +114,20 @@ class SearchService:
         asr_hits: list[SearchHit] = []
         visual_hits: list[SearchHit] = []
         if plan.ocr:
+            log_query_stage("search", "retrieve_ocr")
             ocr_hits = self.es.search(plan.ocr, limit=channel_limit, source="ocr")
         if plan.asr:
+            log_query_stage("search", "retrieve_asr")
             asr_hits = self.es.search(plan.asr, limit=channel_limit, source="asr")
         if plan.visual:
+            log_query_stage("search", "retrieve_visual")
             visual_hits = self.qdrant.search(
                 self.visual.encode_text(plan.visual),
                 vector_name=vector_name,
                 limit=channel_limit,
             )
 
+        log_query_stage("search", "fuse_hits", limit=limit)
         fused = fuse_frame_scores(
             ocr_hits=ocr_hits,
             asr_hits=asr_hits,
@@ -129,6 +135,7 @@ class SearchService:
             weights=plan.weights,
             limit=limit,
         )
+        log_query_stage("search", "done", hits=len(fused))
         return SearchResponse(query=query, mode="mixed", hits=fused, plan=plan)
 
     def search_event_spec(

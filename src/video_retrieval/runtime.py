@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 
 from video_retrieval.config import Settings, get_settings
+from video_retrieval.events.rerank import CrossEncoderReranker
 from video_retrieval.events.searcher import EventChainSearcher
 from video_retrieval.qa.service import QAService
 from video_retrieval.search.kis_service import KisService
@@ -36,7 +37,11 @@ def init_runtime(settings: Settings | None = None, *, force: bool = False) -> Ap
     cfg = settings or get_settings()
     logger.info("Initializing shared search runtime")
     search = SearchService(cfg)
-    chain_search = EventChainSearcher(cfg, search=search)
+    reranker: CrossEncoderReranker | None = None
+    if cfg.chain_rerank_enabled:
+        logger.info("Loading chain rerank model (%s)", cfg.chain_rerank_model_id)
+        reranker = CrossEncoderReranker(cfg)
+    chain_search = EventChainSearcher(cfg, search=search, reranker=reranker)
     _runtime = AppRuntime(
         settings=cfg,
         search=search,

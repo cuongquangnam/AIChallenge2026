@@ -33,8 +33,10 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    from video_retrieval.log_setup import configure_logging
     from video_retrieval.runtime import _runtime
 
+    configure_logging()
     if _runtime is None:
         init_runtime(settings)
     yield

@@ -4,6 +4,7 @@ from video_retrieval.config import Settings, get_settings
 from video_retrieval.events.extractor import EventChainExtractor
 from video_retrieval.events.searcher import EventChainSearcher
 from video_retrieval.models import EventChain, EventChainPlan
+from video_retrieval.query_stages import log_query_stage
 from video_retrieval.search.service import SearchService
 
 
@@ -36,9 +37,16 @@ class EventChainTaskBase:
         query = query.strip()
         if not query:
             raise ValueError("Query must not be empty")
+        log_query_stage(task, "extract_events")
         plan = self.extractor.extract(query, task=task)
         if not plan.events:
             raise ValueError(empty_message)
+        log_query_stage(
+            task,
+            "extract_events_done",
+            events=len(plan.events),
+            question_event=plan.question_event_id,
+        )
         return plan
 
     def search_event_chains(
@@ -53,8 +61,16 @@ class EventChainTaskBase:
             if top_videos is not None
             else max(self.settings.trake_top_videos, min(top_chains, 24))
         )
-        return self.chain_search.search(
+        log_query_stage(
+            plan.task,
+            "chain_search",
+            top_chains=top_chains,
+            top_videos=video_limit,
+        )
+        chains = self.chain_search.search(
             plan,
             top_chains=top_chains,
             top_videos=video_limit,
         )
+        log_query_stage(plan.task, "chain_search_done", chains=len(chains))
+        return chains

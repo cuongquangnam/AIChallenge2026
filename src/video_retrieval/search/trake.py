@@ -3,16 +3,19 @@ from __future__ import annotations
 from video_retrieval.events.export import chain_to_csv_line
 from video_retrieval.events.pipeline import EventChainTaskBase
 from video_retrieval.models import EventChainPlan, TrakeResult
+from video_retrieval.query_stages import log_query_stage
 
 
 class TrakeService(EventChainTaskBase):
     """Parse events and align temporal chains via the shared event pipeline."""
 
     def run(self, query: str, *, top_chains: int | None = None) -> TrakeResult:
+        log_query_stage("trake", "start", top_chains=top_chains or self.settings.trake_top_chains)
         plan = self.parse_events(query)
         chain_limit = top_chains or self.settings.trake_top_chains
         chains = self.search_event_chains(plan, top_chains=chain_limit)
         csv_row = chain_to_csv_line(chains[0]) or "" if chains else ""
+        log_query_stage("trake", "done", chains=len(chains))
         return TrakeResult(
             query=query.strip(),
             plan=plan,

@@ -4,6 +4,7 @@ from video_retrieval.config import Settings, get_settings
 from video_retrieval.events.align import score_videos, top_monotonic_paths
 from video_retrieval.events.rerank import CrossEncoderReranker
 from video_retrieval.models import EventChain, EventChainPlan, EventHit, EventSpec, SearchHit
+from video_retrieval.query_stages import log_query_stage
 from video_retrieval.search.service import SearchService
 
 
@@ -41,14 +42,24 @@ class EventChainSearcher:
         )
         per_event_limit = per_event or self.settings.trake_candidates_per_event
 
+        log_query_stage(
+            plan.task,
+            "retrieve_per_event",
+            events=len(plan.events),
+            limit=limit,
+        )
         event_hits = self._retrieve_events(plan, limit=limit)
-        return self._align_chains(
+        total_hits = sum(len(hits) for hits in event_hits.values())
+        log_query_stage(plan.task, "retrieve_per_event_done", total_hits=total_hits)
+        chains = self._align_chains(
             event_hits,
             plan=plan,
             top_videos=video_limit,
             top_chains=chain_limit,
             per_event=per_event_limit,
         )
+        log_query_stage(plan.task, "align_done", chains=len(chains))
+        return chains
 
     def _retrieve_events(
         self,
@@ -57,8 +68,20 @@ class EventChainSearcher:
         limit: int,
     ) -> dict[str, list[SearchHit]]:
         by_event: dict[str, list[SearchHit]] = {}
-        for event in plan.events:
+        for index, event in enumerate(plan.events, start=1):
+            log_query_stage(
+                plan.task,
+                "retrieve_event",
+                event_id=event.event_id,
+                index=f"{index}/{len(plan.events)}",
+            )
             hits = self.search_service.search_event_spec(event, limit=limit)
+            log_query_stage(
+                plan.task,
+                "retrieve_event_done",
+                event_id=event.event_id,
+                hits=len(hits),
+            )
             if not hits:
                 query = _event_search_query(event, context=plan.context)
                 try:
@@ -124,9 +147,21 @@ class EventChainSearcher:
         ranked_videos = sorted(video_scores.items(), key=lambda item: item[1], reverse=True)
         selected = [video_id for video_id, _ in ranked_videos[: max(top_videos, 1)]]
         paths_per_video = min(per_event, top_chains)
+        log_query_stage(
+            plan.task,
+            "shortlist_videos",
+            videos=len(selected),
+            per_event=per_event,
+        )
 
         chains: list[EventChain] = []
-        for video_id in selected:
+        for video_index, video_id in enumerate(selected, start=1):
+            log_query_stage(
+                plan.task,
+                "align_video",
+                video_id=video_id,
+                index=f"{video_index}/{len(selected)}",
+            )
             per_event_cands = self._per_event_candidates(
                 event_ids,
                 event_hits,
@@ -142,6 +177,7 @@ class EventChainSearcher:
                 reranker = CrossEncoderReranker(self.settings)
                 self._reranker = reranker
             if reranker is not None:
+                log_query_stage(plan.task, "rerank", video_id=video_id)
                 per_event_cands = reranker.rerank_per_event(
                     per_event_cands,
                     event_ids=event_ids,
@@ -150,6 +186,7 @@ class EventChainSearcher:
                     context=plan.context,
                 )
 
+            log_query_stage(plan.task, "align_dp", video_id=video_id, paths_limit=paths_per_video)
             paths = top_monotonic_paths(per_event_cands, limit=paths_per_video)
             for path in paths:
                 event_hits_out: list[EventHit] = []

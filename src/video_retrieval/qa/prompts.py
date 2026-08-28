@@ -27,6 +27,34 @@ SINGLE_FRAME_ANSWER_PROMPT = """You answer a question using only the single vide
 Return JSON only with a short concrete answer when visible."""
 
 
+BATCH_FRAME_ANSWER_PROMPT = """You answer the same question independently for multiple video frame
+candidates. Each candidate is labeled chain_index=N. Use only that candidate's frame to answer.
+Return JSON only with one short concrete answer per chain_index when visible."""
+
+
+def build_batch_frame_answer_prompt(
+    question: str,
+    items: list[tuple[int, str, int, str]],
+) -> str:
+    """Build batch prompt from (chain_index, video_id, frame_id, event_description) tuples."""
+    lines = [
+        f"Question: {question}",
+        "",
+        "Answer each candidate using only its labeled frame:",
+    ]
+    for chain_index, video_id, frame_id, event_description in items:
+        context = f" event={event_description!r}" if event_description else ""
+        lines.append(
+            f"- chain_index={chain_index} video_id={video_id} frame_id={frame_id}{context}"
+        )
+    lines.append("")
+    lines.append(
+        "Return exactly this JSON shape:\n"
+        '{"answers":[{"chain_index":0,"video_id":"...","frame_id":123,"answer":"..."}]}'
+    )
+    return "\n".join(lines)
+
+
 def build_single_frame_answer_prompt(
     question: str,
     video_id: str,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -10,16 +11,25 @@ from video_retrieval.config import Settings
 from video_retrieval.models import QAFrameGroup
 from video_retrieval.qa.prompts import (
     ANSWER_SYSTEM_PROMPT,
+    BATCH_FRAME_ANSWER_PROMPT,
     DECOMPOSITION_SYSTEM_PROMPT,
-    SINGLE_FRAME_ANSWER_PROMPT,
     build_answer_prompt,
+    build_batch_frame_answer_prompt,
     build_decomposition_prompt,
-    build_single_frame_answer_prompt,
 )
 from video_retrieval.text.gemini_config import gemini_generate_config
 from video_retrieval.text.gemini_logging import log_gemini_failure
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class QASingleFrameRequest:
+    chain_index: int
+    video_id: str
+    frame_id: int
+    image_path: Path | None
+    event_description: str = ""
 
 
 class QAError(RuntimeError):
@@ -56,6 +66,13 @@ class QAModel(Protocol):
         event_description: str = "",
     ) -> str: ...
 
+    def answer_single_frames_batch(
+        self,
+        *,
+        question: str,
+        items: list[QASingleFrameRequest],
+    ) -> dict[int, str]: ...
+
 
 class UnconfiguredQAModel:
     def _raise(self) -> None:
@@ -89,6 +106,15 @@ class UnconfiguredQAModel:
     ) -> str:
         self._raise()
         return ""
+
+    def answer_single_frames_batch(
+        self,
+        *,
+        question: str,
+        items: list[QASingleFrameRequest],
+    ) -> dict[int, str]:
+        self._raise()
+        return {}
 
 
 class GeminiQAModel:
@@ -134,28 +160,71 @@ class GeminiQAModel:
         image_path: Path | None,
         event_description: str = "",
     ) -> str:
-        from PIL import Image
-
-        parts: list = [
-            self._types.Part.from_text(text=SINGLE_FRAME_ANSWER_PROMPT),
-            self._types.Part.from_text(
-                text=build_single_frame_answer_prompt(
-                    question,
-                    video_id,
-                    frame_id,
+        answers = self.answer_single_frames_batch(
+            question=question,
+            items=[
+                QASingleFrameRequest(
+                    chain_index=0,
+                    video_id=video_id,
+                    frame_id=frame_id,
+                    image_path=image_path,
                     event_description=event_description,
                 )
+            ],
+        )
+        return answers.get(0, "")
+
+    def answer_single_frames_batch(
+        self,
+        *,
+        question: str,
+        items: list[QASingleFrameRequest],
+    ) -> dict[int, str]:
+        if not items:
+            return {}
+        from PIL import Image
+
+        prompt_items = [
+            (item.chain_index, item.video_id, item.frame_id, item.event_description)
+            for item in items
+        ]
+        parts: list = [
+            self._types.Part.from_text(text=BATCH_FRAME_ANSWER_PROMPT),
+            self._types.Part.from_text(
+                text=build_batch_frame_answer_prompt(question, prompt_items)
             ),
         ]
-        if image_path is not None and image_path.is_file():
-            image = Image.open(image_path)
-            if image.mode not in ("RGB", "L"):
-                image = image.convert("RGB")
-            parts.append(self._types.Part.from_text(text=f"frame_id={frame_id}"))
-            parts.append(self._types.Part(image))
+        for item in items:
+            parts.append(
+                self._types.Part.from_text(
+                    text=(
+                        f"chain_index={item.chain_index} "
+                        f"video_id={item.video_id} frame_id={item.frame_id}"
+                    )
+                )
+            )
+            if item.image_path is not None and item.image_path.is_file():
+                image = Image.open(item.image_path)
+                if image.mode not in ("RGB", "L"):
+                    image = image.convert("RGB")
+                parts.append(self._types.Part(image))
+
         raw = self._generate_parts(parts)
         payload = _parse_json_object(raw)
-        return str(payload.get("answer") or "").strip()
+        answers_raw = payload.get("answers")
+        if not isinstance(answers_raw, list):
+            raise InvalidQAModelResponseError("LLM batch response is missing answers[]")
+
+        out: dict[int, str] = {}
+        for entry in answers_raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                chain_index = int(entry.get("chain_index"))
+            except (TypeError, ValueError):
+                continue
+            out[chain_index] = str(entry.get("answer") or "").strip()
+        return out
 
     def answer_with_frames(
         self,

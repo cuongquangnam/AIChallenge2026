@@ -15,6 +15,13 @@ from video_retrieval.search.trake import TrakeService
 app = typer.Typer(help="Index and search videos (keyframes + OCR/ASR).")
 
 
+@app.callback()
+def _cli_main() -> None:
+    from video_retrieval.log_setup import configure_logging
+
+    configure_logging()
+
+
 def _data_dir_option() -> Path | None:
     return typer.Option(
         None,
@@ -188,11 +195,11 @@ def serve_cmd(
     port: Optional[int] = None,
     data_dir: Optional[Path] = _data_dir_option(),
 ) -> None:
-    import logging
-
     import uvicorn
 
-    logging.getLogger("video_retrieval").setLevel(logging.INFO)
+    from video_retrieval.log_setup import configure_logging, uvicorn_log_config
+
+    configure_logging()
     settings = get_settings(data_dir=data_dir)
     from video_retrieval import api as api_module
 
@@ -207,6 +214,7 @@ def serve_cmd(
         port=port or settings.api_port,
         reload=False,
         log_level="info",
+        log_config=uvicorn_log_config(),
     )
 
 

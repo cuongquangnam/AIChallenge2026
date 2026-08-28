@@ -10,7 +10,8 @@ from video_retrieval.events.plan_utils import event_description, questioned_fram
 from video_retrieval.events.searcher import EventChainSearcher
 from video_retrieval.models import EventChain, QAAnswerHit, QAResult, QAResultItem, SearchHit
 from video_retrieval.qa.frames import QAFrameSampler
-from video_retrieval.qa.llm import QAModel, create_qa_model
+from video_retrieval.qa.llm import QAModel, QASingleFrameRequest, create_qa_model
+from video_retrieval.query_stages import log_query_stage
 from video_retrieval.search.kis import hits_to_submission_rows
 from video_retrieval.search.service import SearchService
 from video_retrieval.text.gemini_logging import log_gemini_failure
@@ -43,6 +44,7 @@ class QAService(EventChainTaskBase):
         if limit < 1:
             raise ValueError("limit must be >= 1")
 
+        log_query_stage("qa", "start", limit=limit)
         plan = self.extract_events(
             question,
             "qa",
@@ -56,6 +58,7 @@ class QAService(EventChainTaskBase):
         if not chains:
             raise RuntimeError("No aligned event chains found for this question")
 
+        log_query_stage("qa", "vlm_answer", chains=len(chains))
         results = self._answer_chains(
             question,
             plan,
@@ -64,6 +67,7 @@ class QAService(EventChainTaskBase):
         )
         best = results[0]
         hits = self._build_ranked_hits(results=results, limit=limit)
+        log_query_stage("qa", "done", answer=best.answer, results=len(results))
         descriptions = [
             event.description or event.visual or event.ocr
             for event in plan.events
@@ -90,37 +94,81 @@ class QAService(EventChainTaskBase):
         *,
         frame_radius: int | None,
     ) -> list[QAResultItem]:
-        results: list[QAResultItem] = []
         radius = (
             self.settings.qa_frame_radius if frame_radius is None else frame_radius
         )
+        batch_size = max(1, self.settings.gemini_batch_size)
+        pending: list[tuple[EventChain, str, int, QASingleFrameRequest]] = []
 
-        for chain in chains:
+        for chain_index, chain in enumerate(chains):
             q_event_id, q_frame = questioned_frame(plan, chain)
-            answer = ""
-            try:
-                image_path = self._resolve_question_image(chain, q_frame, radius=radius)
-                answer = self.model.answer_single_frame(
-                    question=question,
-                    video_id=chain.video_id,
-                    frame_id=q_frame,
-                    image_path=image_path,
-                    event_description=event_description(plan, q_event_id),
+            image_path = self._resolve_question_image(chain, q_frame, radius=radius)
+            pending.append(
+                (
+                    chain,
+                    q_event_id,
+                    q_frame,
+                    QASingleFrameRequest(
+                        chain_index=chain_index,
+                        video_id=chain.video_id,
+                        frame_id=q_frame,
+                        image_path=image_path,
+                        event_description=event_description(plan, q_event_id),
+                    ),
                 )
+            )
+
+        answers: dict[int, str] = {}
+        for batch_start in range(0, len(pending), batch_size):
+            batch = pending[batch_start : batch_start + batch_size]
+            batch_items = [item for _, _, _, item in batch]
+            batch_no = batch_start // batch_size + 1
+            batch_total = (len(pending) + batch_size - 1) // batch_size
+            log_query_stage(
+                "qa",
+                "vlm_batch",
+                batch=f"{batch_no}/{batch_total}",
+                chains=len(batch_items),
+            )
+            try:
+                batch_answers = self.model.answer_single_frames_batch(
+                    question=question,
+                    items=batch_items,
+                )
+                answers.update(batch_answers)
             except Exception as exc:
                 log_gemini_failure(
-                    component="QA answer_single_frame",
+                    component="QA answer_single_frames_batch",
                     model=self.settings.gemini_model,
                     exc=exc,
                     query=question,
-                    fallback="blank answer for chain result",
+                    fallback="per-chain single-frame calls",
                 )
-                answer = ""
+                for _, _, _, item in batch:
+                    try:
+                        answers[item.chain_index] = self.model.answer_single_frame(
+                            question=question,
+                            video_id=item.video_id,
+                            frame_id=item.frame_id,
+                            image_path=item.image_path,
+                            event_description=item.event_description,
+                        )
+                    except Exception as single_exc:
+                        log_gemini_failure(
+                            component="QA answer_single_frame",
+                            model=self.settings.gemini_model,
+                            exc=single_exc,
+                            query=question,
+                            fallback="blank answer for chain result",
+                        )
+                        answers[item.chain_index] = ""
 
+        results: list[QAResultItem] = []
+        for chain, q_event_id, q_frame, item in pending:
             results.append(
                 QAResultItem(
                     chain=chain,
-                    answer=answer,
+                    answer=answers.get(item.chain_index, ""),
                     questioned_event_id=q_event_id,
                     questioned_frame_id=q_frame,
                 )

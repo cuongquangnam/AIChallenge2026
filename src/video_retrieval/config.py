@@ -46,10 +46,10 @@ class Settings(BaseSettings):
     kis_max_events: int = 5
     kis_top_chains: int = 24
 
-    trake_event_limit: int = 80
-    trake_top_videos: int = 8
-    trake_top_chains: int = 5
-    trake_candidates_per_event: int = 30
+    trake_event_limit: int = 100
+    trake_top_videos: int = 15
+    trake_top_chains: int = 10
+    trake_candidates_per_event: int = 50
 
     chain_rerank_enabled: bool = True
     chain_rerank_backend: str = "auto"  # auto | mock | real

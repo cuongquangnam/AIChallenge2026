@@ -36,4 +36,4 @@ def log_gemini_failure(
         lines.append(f"  fallback={fallback}")
     lines.append("  traceback:")
     lines.extend("    " + row for row in traceback.format_exception(type(exc), exc, exc.__traceback__))
-    logger.error("\n".join(lines))
+    logger.error("\n".join(lines), stacklevel=2)
