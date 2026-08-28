@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     chain_rerank_backend: str = "auto"  # auto | mock | real
     chain_rerank_model_id: str = "Salesforce/blip-itm-base-coco"
     chain_rerank_blend: float = 0.6
+    chain_gap_weight: float = 0.5
+    chain_gap_hard_factor: float = 3.0
+    video_fps: float = 25.0
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000

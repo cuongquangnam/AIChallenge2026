@@ -35,6 +35,19 @@ function appendPlanTerm(planBodyEl, label, value) {
   planBodyEl.append(dt, dd);
 }
 
+function formatGap(spec) {
+  const expected = spec?.gap_from_prev_sec;
+  if (typeof expected !== "number" || Number.isNaN(expected)) return "";
+  const round1 = (value) =>
+    Number.isInteger(value) ? String(value) : value.toFixed(1);
+  const lo = spec.gap_min_sec;
+  const hi = spec.gap_max_sec;
+  if (typeof lo === "number" && typeof hi === "number") {
+    return `~${round1(expected)}s (${round1(lo)}–${round1(hi)}s)`;
+  }
+  return `~${round1(expected)}s`;
+}
+
 function appendEventSpecChannels(parent, spec, { compact = false } = {}) {
   if (!parent || !spec) return;
   const channels = compact ? COMPACT_CHANNELS : PLAN_CHANNELS;
@@ -48,6 +61,17 @@ function appendEventSpecChannels(parent, spec, { compact = false } = {}) {
       parent.appendChild(line);
     } else {
       appendPlanChannel(parent, label, text);
+    }
+  }
+  const gap = formatGap(spec);
+  if (gap) {
+    if (compact) {
+      const line = document.createElement("span");
+      line.className = "trake-event-spec-line";
+      line.textContent = `gap: ${gap}`;
+      parent.appendChild(line);
+    } else {
+      appendPlanChannel(parent, "gap from prev", gap);
     }
   }
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import Literal
 
@@ -29,7 +30,10 @@ Return JSON only, no markdown:
       "ocr": "on-screen text likely visible during this event",
       "asr": "spoken words likely heard during this event",
       "visual": "concise English visual description for image-text search",
-      "is_question_target": false
+      "is_question_target": false,
+      "gap_from_prev_sec": null,
+      "gap_min_sec": null,
+      "gap_max_sec": null
     }}
   ]
 }}
@@ -38,6 +42,16 @@ Rules:
 - Use empty string when a channel is irrelevant.
 - Keep ocr/asr in the query language; put visual in concise English.
 - Do not invent events not described in the query.
+- For E1, gap_from_prev_sec / gap_min_sec / gap_max_sec must be null.
+- For E2+, estimate wall-clock seconds between this event and the previous one
+  in a typical 1–4 minute news/cooking/report clip:
+  * same continuous action or next cooking step: expected 1–8, max ≤ 15
+  * "then / sau đó / tiếp theo / tiếp đến": expected 3–20, max ≤ 40
+  * "right after / ngay sau / lập tức": expected 1–4, max ≤ 10
+  * start-of-clip vs end-of-clip, or a clear scene change: expected 10–45, max ≤ 90
+  * "finally / cuối cùng / later": expected 15–60, max ≤ 120
+- Always give a number even if uncertain; widen gap_max_sec when unsure.
+- These are short videos, never hours.
 {task_rules}
 
 Query:
@@ -143,13 +157,16 @@ def _heuristic_trake(query: str) -> EventChainPlan:
     if not matches:
         return EventChainPlan(
             task="trake",
-            events=[
-                EventSpec(
-                    event_id="E1",
-                    description=query.strip(),
-                    visual=query.strip()[:160],
-                )
-            ],
+            events=_apply_event_gaps(
+                [
+                    EventSpec(
+                        event_id="E1",
+                        description=query.strip(),
+                        visual=query.strip()[:160],
+                    )
+                ],
+                query=query,
+            ),
         )
     context = query[: matches[0].start()].strip()
     events: list[EventSpec] = []
@@ -163,7 +180,11 @@ def _heuristic_trake(query: str) -> EventChainPlan:
                 visual=text[:160],
             )
         )
-        return EventChainPlan(task="trake", context=context, events=events)
+    return EventChainPlan(
+        task="trake",
+        context=context,
+        events=_apply_event_gaps(events, query=query),
+    )
 
 
 def _heuristic_kis(query: str) -> EventChainPlan:
@@ -182,7 +203,12 @@ def _heuristic_kis(query: str) -> EventChainPlan:
         )
         for index, part in enumerate(parts, start=1)
     ]
-    return EventChainPlan(task="kis", context=parts[0][:80] if parts else "", events=events)
+    events = _apply_event_gaps(events, query=query)
+    return EventChainPlan(
+        task="kis",
+        context=parts[0][:80] if parts else "",
+        events=events,
+    )
 
 
 def _heuristic_qa(query: str) -> EventChainPlan:
@@ -222,7 +248,7 @@ def _heuristic_qa(query: str) -> EventChainPlan:
     return EventChainPlan(
         task="qa",
         context=context_text[:200],
-        events=events,
+        events=_apply_event_gaps(events, query=query),
         question_event_id=q_id,
     )
 
@@ -282,6 +308,9 @@ def parse_event_plan(
                     asr=str(item.get("asr") or "").strip(),
                     visual=str(item.get("visual") or description).strip(),
                     is_question_target=bool(item.get("is_question_target")),
+                    gap_from_prev_sec=_as_optional_float(item.get("gap_from_prev_sec")),
+                    gap_min_sec=_as_optional_float(item.get("gap_min_sec")),
+                    gap_max_sec=_as_optional_float(item.get("gap_max_sec")),
                 )
             )
 
@@ -307,6 +336,96 @@ def parse_event_plan(
     return EventChainPlan(
         task=task,
         context=str(payload.get("context") or "").strip(),
-        events=events,
+        events=_apply_event_gaps(events, query=fallback_query),
         question_event_id=question_event_id,
     )
+
+
+def _as_optional_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _complete_gap_range(
+    expected: float,
+    lo: float | None,
+    hi: float | None,
+) -> tuple[float, float]:
+    if lo is None:
+        lo = max(0.0, expected * 0.25)
+    if hi is None:
+        hi = max(expected * 3.0, expected + 5.0)
+    lo = max(0.0, lo)
+    hi = max(lo, hi)
+    return lo, hi
+
+
+def _heuristic_gap(prev_text: str, curr_text: str, query: str) -> tuple[float, float, float]:
+    prev = prev_text.lower()
+    curr = curr_text.lower()
+    pair = f"{prev} {curr}"
+    blob = f"{query} {pair}".lower()
+    if re.search(r"ngay sau|lập tức|immediately|right after|cùng lúc", pair):
+        return 2.0, 0.3, 8.0
+    if re.search(r"sau vài giây|after a few seconds", blob):
+        return 4.0, 1.0, 12.0
+    if re.search(r"bắt đầu|starts?\s+with", prev) and re.search(
+        r"kết thúc|ends?\s+with", curr
+    ):
+        return 25.0, 5.0, 90.0
+    if re.search(r"cuối cùng|finally|\blater\b", curr):
+        return 20.0, 4.0, 80.0
+    if re.search(
+        r"sau đó|tiếp theo|tiếp đến|\bthen\b|after that|followed by",
+        pair,
+    ):
+        return 8.0, 1.5, 30.0
+    return 6.0, 0.5, 25.0
+
+
+def _apply_event_gaps(events: list[EventSpec], *, query: str) -> list[EventSpec]:
+    if not events:
+        return events
+    filled: list[EventSpec] = []
+    for index, event in enumerate(events):
+        if index == 0:
+            filled.append(
+                event.model_copy(
+                    update={
+                        "gap_from_prev_sec": None,
+                        "gap_min_sec": None,
+                        "gap_max_sec": None,
+                    }
+                )
+            )
+            continue
+        expected = event.gap_from_prev_sec
+        lo = event.gap_min_sec
+        hi = event.gap_max_sec
+        if expected is None:
+            prev = events[index - 1]
+            expected, lo, hi = _heuristic_gap(
+                prev.description or prev.visual,
+                event.description or event.visual,
+                query,
+            )
+        else:
+            expected = max(0.0, min(expected, 180.0))
+            lo, hi = _complete_gap_range(expected, lo, hi)
+        filled.append(
+            event.model_copy(
+                update={
+                    "gap_from_prev_sec": expected,
+                    "gap_min_sec": lo,
+                    "gap_max_sec": hi,
+                }
+            )
+        )
+    return filled

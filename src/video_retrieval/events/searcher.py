@@ -3,6 +3,7 @@ from __future__ import annotations
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.events.align import score_videos, top_monotonic_paths
 from video_retrieval.events.rerank import CrossEncoderReranker
+from video_retrieval.events.timing import chain_gap_score, gaps_from_events
 from video_retrieval.models import EventChain, EventChainPlan, EventHit, EventSpec, SearchHit
 from video_retrieval.query_stages import log_query_stage
 from video_retrieval.search.service import SearchService
@@ -147,6 +148,7 @@ class EventChainSearcher:
         ranked_videos = sorted(video_scores.items(), key=lambda item: item[1], reverse=True)
         selected = [video_id for video_id, _ in ranked_videos[: max(top_videos, 1)]]
         paths_per_video = min(per_event, top_chains)
+        gaps = gaps_from_events(plan.events)
         log_query_stage(
             plan.task,
             "shortlist_videos",
@@ -187,7 +189,14 @@ class EventChainSearcher:
                 )
 
             log_query_stage(plan.task, "align_dp", video_id=video_id, paths_limit=paths_per_video)
-            paths = top_monotonic_paths(per_event_cands, limit=paths_per_video)
+            paths = top_monotonic_paths(
+                per_event_cands,
+                limit=paths_per_video,
+                gaps=gaps,
+                gap_weight=self.settings.chain_gap_weight,
+                hard_factor=self.settings.chain_gap_hard_factor,
+                fps=self.settings.video_fps,
+            )
             for path in paths:
                 event_hits_out: list[EventHit] = []
                 total = 0.0
@@ -206,10 +215,16 @@ class EventChainSearcher:
                             description=spec.description if spec else None,
                         )
                     )
+                timing = chain_gap_score(
+                    path,
+                    gaps,
+                    weight=self.settings.chain_gap_weight,
+                    fps=self.settings.video_fps,
+                )
                 chains.append(
                     EventChain(
                         video_id=video_id,
-                        score=total + video_scores.get(video_id, 0.0),
+                        score=total + video_scores.get(video_id, 0.0) + timing,
                         events=event_hits_out,
                     )
                 )

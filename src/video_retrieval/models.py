@@ -137,6 +137,10 @@ class EventSpec(BaseModel):
     asr: str = ""
     visual: str = ""
     is_question_target: bool = False
+    # Seconds from the previous event in a typical clip. E1 is always null.
+    gap_from_prev_sec: float | None = None
+    gap_min_sec: float | None = None
+    gap_max_sec: float | None = None
 
 
 class EventChainPlan(BaseModel):
