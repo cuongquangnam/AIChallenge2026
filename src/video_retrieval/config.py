@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     trake_top_chains: int = 5
     trake_candidates_per_event: int = 30
 
+    chain_rerank_enabled: bool = True
+    chain_rerank_backend: str = "auto"  # auto | mock | real
+    chain_rerank_model_id: str = "Salesforce/blip-itm-base-coco"
+    chain_rerank_blend: float = 0.6
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 

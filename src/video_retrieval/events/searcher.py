@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.events.align import score_videos, top_monotonic_paths
+from video_retrieval.events.rerank import CrossEncoderReranker
 from video_retrieval.models import EventChain, EventChainPlan, EventHit, EventSpec, SearchHit
 from video_retrieval.search.service import SearchService
 
@@ -14,9 +15,11 @@ class EventChainSearcher:
         settings: Settings | None = None,
         *,
         search: SearchService | None = None,
+        reranker: CrossEncoderReranker | None = None,
     ):
         self.settings = settings or get_settings()
         self.search_service = search or SearchService(self.settings)
+        self._reranker = reranker
 
     def search(
         self,
@@ -134,6 +137,19 @@ class EventChainSearcher:
             if per_event_cands is None:
                 continue
 
+            reranker = self._reranker
+            if reranker is None and self.settings.chain_rerank_enabled:
+                reranker = CrossEncoderReranker(self.settings)
+                self._reranker = reranker
+            if reranker is not None:
+                per_event_cands = reranker.rerank_per_event(
+                    per_event_cands,
+                    event_ids=event_ids,
+                    events_by_id=events_by_id,
+                    video_id=video_id,
+                    context=plan.context,
+                )
+
             paths = top_monotonic_paths(per_event_cands, limit=paths_per_video)
             for path in paths:
                 event_hits_out: list[EventHit] = []
@@ -225,5 +241,4 @@ def _event_search_query(event: EventSpec, *, context: str = "") -> str:
     if len(base) > 160:
         base = base[:160].rsplit(" ", 1)[0] or base[:160]
     return base
-
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -20,10 +21,7 @@ from video_retrieval.qa.llm import (
     InvalidQAModelResponseError,
     QAModelNotConfiguredError,
 )
-from video_retrieval.qa.service import QAService
-from video_retrieval.search.kis_service import KisService
-from video_retrieval.search.service import SearchService
-from video_retrieval.search.trake import TrakeService
+from video_retrieval.runtime import get_runtime, init_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +30,21 @@ settings.ensure_dirs()
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    from video_retrieval.runtime import _runtime
+
+    if _runtime is None:
+        init_runtime(settings)
+    yield
+
+
 app = FastAPI(
     title="Video Retrieval API",
     description="Search UI + KIS / QA / TRAKE task pages for video keyframes",
     version="0.2.0",
+    lifespan=_lifespan,
 )
 
 
@@ -273,7 +282,7 @@ def _rows_to_csv(rows: list[tuple[str, int]]) -> str:
 
 @app.post("/search")
 def search(body: SearchRequest):
-    service = SearchService(settings)
+    service = get_runtime().search
     if body.mode == "ocr":
         response = service.search_ocr(body.query, limit=body.limit)
     elif body.mode == "asr":
@@ -292,7 +301,7 @@ def search(body: SearchRequest):
 @app.post("/kis")
 def kis_search(body: KisRequest):
     try:
-        result = KisService(settings).run(body.query, limit=body.limit)
+        result = get_runtime().kis.run(body.query, limit=body.limit)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -314,7 +323,7 @@ def kis_search(body: KisRequest):
 @app.post("/qa")
 def answer_question(body: QARequest):
     try:
-        result = QAService(settings).answer(
+        result = get_runtime().qa.answer(
             body.question,
             limit=body.limit,
             frame_radius=body.frame_radius,
@@ -422,7 +431,7 @@ def _qa_rows_to_csv(rows: list[tuple[str, int, str]]) -> str:
 @app.post("/trake")
 def trake_search(body: TrakeRequest):
     try:
-        result = TrakeService(settings).run(body.query, top_chains=body.top_chains)
+        result = get_runtime().trake.run(body.query, top_chains=body.top_chains)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

@@ -198,6 +198,9 @@ def serve_cmd(
 
     api_module.settings = settings
     api_module.settings.ensure_dirs()
+    from video_retrieval.runtime import init_runtime
+
+    init_runtime(settings, force=True)
     uvicorn.run(
         api_module.app,
         host=host or settings.api_host,
