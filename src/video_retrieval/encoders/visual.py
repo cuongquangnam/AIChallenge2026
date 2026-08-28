@@ -11,11 +11,12 @@ from video_retrieval.models import KeyFrame, VisualEmbedding
 
 
 class VisualEncoder:
-    """SigLIP + BEiT3 visual encoders with a deterministic mock backend."""
+    """SigLIP + optional BEiT visual encoders with a deterministic mock backend."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, load_beit: bool = True):
         self.settings = settings
         self.backend = settings.visual_backend
+        self.load_beit = load_beit
         self._siglip = None
         self._siglip_processor = None
         self._beit = None
@@ -44,10 +45,11 @@ class VisualEncoder:
         self._siglip = AutoModel.from_pretrained(self.settings.siglip_model_id).to(self._device)
         self._siglip.eval()
 
-        # BEiT is used as a practical stand-in if a BEiT-3 checkpoint is unavailable.
-        self._beit_processor = AutoImageProcessor.from_pretrained(self.settings.beit3_model_id)
-        self._beit = AutoModel.from_pretrained(self.settings.beit3_model_id).to(self._device)
-        self._beit.eval()
+        if self.load_beit:
+            # BEiT is used as a practical stand-in if a BEiT-3 checkpoint is unavailable.
+            self._beit_processor = AutoImageProcessor.from_pretrained(self.settings.beit3_model_id)
+            self._beit = AutoModel.from_pretrained(self.settings.beit3_model_id).to(self._device)
+            self._beit.eval()
 
     def encode_image(self, image_path: Path) -> tuple[list[float], list[float]]:
         if self.backend == "real":
@@ -69,8 +71,11 @@ class VisualEncoder:
 
     def _encode_mock(self, image_path: Path) -> tuple[list[float], list[float]]:
         seed = f"{image_path.resolve()}:{image_path.stat().st_size}"
+        siglip = self._hash_embed(seed + ":siglip", self.settings.siglip_dim)
+        if not self.load_beit:
+            return siglip, []
         return (
-            self._hash_embed(seed + ":siglip", self.settings.siglip_dim),
+            siglip,
             self._hash_embed(seed + ":beit3", self.settings.beit3_dim),
         )
 
@@ -83,6 +88,9 @@ class VisualEncoder:
             siglip_inputs = {k: v.to(self._device) for k, v in siglip_inputs.items()}
             siglip_out = self._siglip.get_image_features(**siglip_inputs)
             siglip_vec = self._to_unit_vector(siglip_out)
+
+            if not self.load_beit:
+                return siglip_vec, []
 
             beit_inputs = self._beit_processor(images=image, return_tensors="pt")
             beit_inputs = {k: v.to(self._device) for k, v in beit_inputs.items()}

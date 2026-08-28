@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.events.align import score_videos, top_monotonic_paths
-from video_retrieval.events.rerank import CrossEncoderReranker
+from video_retrieval.events.rerank import CrossEncoderReranker, PooledCrossEncoderReranker
 from video_retrieval.events.timing import chain_gap_score, gaps_from_events
 from video_retrieval.models import EventChain, EventChainPlan, EventHit, EventSpec, SearchHit
 from video_retrieval.query_stages import log_query_stage
@@ -17,7 +17,7 @@ class EventChainSearcher:
         settings: Settings | None = None,
         *,
         search: SearchService | None = None,
-        reranker: CrossEncoderReranker | None = None,
+        reranker: CrossEncoderReranker | PooledCrossEncoderReranker | None = None,
     ):
         self.settings = settings or get_settings()
         self.search_service = search or SearchService(self.settings)

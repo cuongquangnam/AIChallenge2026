@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from video_retrieval.config import Settings
 from video_retrieval.models import EventSpec, SearchHit
+
+if TYPE_CHECKING:
+    from video_retrieval.model_pool import ModelPool
 
 
 class CrossEncoderReranker:
@@ -175,3 +179,29 @@ def _mock_ce_score(query: str, hit: SearchHit, *, video_id: str) -> float:
     seed = f"{query}:{video_id}:{hit.frame_index}:{hit.keyframe_path}"
     rng = np.random.default_rng(abs(hash(seed)) % (2**32))
     return float(rng.random())
+
+
+class PooledCrossEncoderReranker:
+    """BLIP reranker with exclusive access per pool slot."""
+
+    def __init__(self, pool: "ModelPool[CrossEncoderReranker]", *, settings: Settings):
+        self.settings = settings
+        self._pool = pool
+
+    def rerank_per_event(
+        self,
+        per_event_cands: list[list[tuple[int, float, SearchHit]]],
+        *,
+        event_ids: list[str],
+        events_by_id: dict[str, EventSpec],
+        video_id: str,
+        context: str = "",
+    ) -> list[list[tuple[int, float, SearchHit]]]:
+        with self._pool.borrow() as reranker:
+            return reranker.rerank_per_event(
+                per_event_cands,
+                event_ids=event_ids,
+                events_by_id=events_by_id,
+                video_id=video_id,
+                context=context,
+            )

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from video_retrieval.config import Settings, get_settings
+from video_retrieval.encoders.pooled import PooledVisualEncoder
 from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.models import QueryPlan, SearchHit, SearchResponse
 from video_retrieval.query_stages import log_query_stage
@@ -20,13 +21,13 @@ class SearchService:
         self,
         settings: Settings | None = None,
         *,
-        visual: VisualEncoder | None = None,
+        visual: VisualEncoder | PooledVisualEncoder | None = None,
         qdrant: QdrantStore | None = None,
         es: ElasticsearchStore | None = None,
         planner: QueryPlanner | None = None,
     ):
         self.settings = settings or get_settings()
-        self.visual = visual or VisualEncoder(self.settings)
+        self.visual = visual or VisualEncoder(self.settings, load_beit=False)
         self.qdrant = qdrant or QdrantStore(self.settings)
         self.es = es or ElasticsearchStore(self.settings)
         self.planner = planner or QueryPlanner(self.settings)
@@ -82,8 +83,12 @@ class SearchService:
         limit: int = 10,
         vector_name: str = "siglip",
     ) -> SearchResponse:
+        if vector_name == "beit3" and not getattr(self.visual, "supports_beit", True):
+            raise ValueError("BEiT search is disabled; use vector_name='siglip'")
         siglip, beit3 = self.visual.encode_image(Path(image_path))
         vector = siglip if vector_name == "siglip" else beit3
+        if vector_name == "beit3" and not beit3:
+            raise ValueError("BEiT vector unavailable for this encoder")
         hits = self.qdrant.search(vector, vector_name=vector_name, limit=limit)
         return SearchResponse(query=str(image_path), mode=f"visual_image:{vector_name}", hits=hits)
 

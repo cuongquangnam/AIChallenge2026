@@ -9,6 +9,15 @@ from tests.helpers import write_dummy_image
 
 
 @pytest.mark.unit
+def test_siglip_only_encoder_skips_beit_mock(settings: Settings, tmp_path: Path) -> None:
+    encoder = VisualEncoder(settings, load_beit=False)
+    image = write_dummy_image(tmp_path / "frame.jpg")
+    siglip, beit = encoder.encode_image(image)
+    assert len(siglip) == settings.siglip_dim
+    assert beit == []
+
+
+@pytest.mark.unit
 def test_mock_encoder_dimensions_and_determinism(tmp_path: Path, settings: Settings) -> None:
     image = write_dummy_image(tmp_path / "frame.jpg")
     encoder = VisualEncoder(settings)
