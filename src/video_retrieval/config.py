@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     qa_frame_stride: int = 1
     qa_min_center_gap: int = 10
 
+    kis_max_events: int = 5
+    kis_top_chains: int = 24
+
     trake_event_limit: int = 80
     trake_top_videos: int = 8
     trake_top_chains: int = 5

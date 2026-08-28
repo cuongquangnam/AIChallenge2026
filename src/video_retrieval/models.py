@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -115,16 +115,6 @@ class QAFrameGroup(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
-class QAResult(BaseModel):
-    question: str
-    video_id: str
-    frame_id: int
-    answer: str
-    descriptions: list[str] = Field(default_factory=list)
-    frame_groups: list[QAFrameGroup] = Field(default_factory=list)
-    hits: list["QAAnswerHit"] = Field(default_factory=list)
-
-
 class QAAnswerHit(BaseModel):
     """One ranked QA submission row: video_id, frame_id, answer."""
 
@@ -138,36 +128,80 @@ class QAAnswerHit(BaseModel):
     source: str = "qa"
 
 
-class TrakeEventPlan(BaseModel):
+class EventSpec(BaseModel):
+    """One ordered event in a KIS / QA / TRAKE query."""
+
     event_id: str
+    description: str = ""
     ocr: str = ""
     asr: str = ""
     visual: str = ""
+    is_question_target: bool = False
 
 
-class TrakePlan(BaseModel):
+class EventChainPlan(BaseModel):
+    task: Literal["kis", "qa", "trake"] = "kis"
     context: str = ""
-    events: list[TrakeEventPlan] = Field(default_factory=list)
+    events: list[EventSpec] = Field(default_factory=list)
+    question_event_id: str | None = None
 
 
-class TrakeEventHit(BaseModel):
+class EventHit(BaseModel):
     event_id: str
     frame_index: int
     score: float = 0.0
     timestamp_sec: float | None = None
     keyframe_path: str | None = None
     text: str | None = None
-    source: str = "trake"
+    source: str = "event"
+    description: str | None = None
+    image_url: str | None = None
+    video_url: str | None = None
 
 
-class TrakeChain(BaseModel):
+class EventChain(BaseModel):
     video_id: str
     score: float
-    events: list[TrakeEventHit] = Field(default_factory=list)
+    events: list[EventHit] = Field(default_factory=list)
+
+
+# TRAKE aliases (backward compatible API field names).
+TrakeEventPlan = EventSpec
+TrakePlan = EventChainPlan
+TrakeEventHit = EventHit
+TrakeChain = EventChain
 
 
 class TrakeResult(BaseModel):
     query: str
-    plan: TrakePlan | None = None
-    chains: list[TrakeChain] = Field(default_factory=list)
+    plan: EventChainPlan | None = None
+    chains: list[EventChain] = Field(default_factory=list)
     csv_row: str = ""
+
+
+class KisResult(BaseModel):
+    query: str
+    plan: EventChainPlan | None = None
+    chains: list[EventChain] = Field(default_factory=list)
+    hits: list[SearchHit] = Field(default_factory=list)
+    submission_rows: list[tuple[str, int]] = Field(default_factory=list)
+
+
+class QAResultItem(BaseModel):
+    chain: EventChain
+    answer: str
+    questioned_event_id: str
+    questioned_frame_id: int
+
+
+class QAResult(BaseModel):
+    question: str
+    video_id: str
+    frame_id: int
+    answer: str
+    plan: EventChainPlan | None = None
+    results: list[QAResultItem] = Field(default_factory=list)
+    hits: list["QAAnswerHit"] = Field(default_factory=list)
+    # Legacy fields kept for gradual UI migration.
+    descriptions: list[str] = Field(default_factory=list)
+    frame_groups: list[QAFrameGroup] = Field(default_factory=list)

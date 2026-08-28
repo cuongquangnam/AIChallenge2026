@@ -1,3 +1,13 @@
+import {
+  eventSpecByIdFromPlan,
+  renderChainCards,
+  renderEventPlan,
+} from "./chains.js";
+import { downloadTextFile } from "./shared/export.js";
+import { formatScore, joinMeta, sanitizeQueryId } from "./shared/format.js";
+import { createLightboxController } from "./shared/lightbox.js";
+import { createStatusController } from "./shared/status.js";
+
 const form = document.getElementById("qa-form");
 const questionEl = document.getElementById("question");
 const queryIdEl = document.getElementById("query-id");
@@ -10,103 +20,74 @@ const resultsMetaEl = document.getElementById("results-meta");
 const answerVideoEl = document.getElementById("answer-video");
 const answerFrameEl = document.getElementById("answer-frame");
 const answerTextEl = document.getElementById("answer-text");
-const descriptionsEl = document.getElementById("descriptions");
-const descriptionListEl = document.getElementById("description-list");
-const evidenceCardEl = document.getElementById("evidence-card");
-const evidenceImgEl = document.getElementById("evidence-img");
-const evidenceMetaEl = document.getElementById("evidence-meta");
-const evidenceThumbBtn = document.getElementById("evidence-thumb-btn");
-const playEvidenceBtn = document.getElementById("play-evidence");
-const groupsEl = document.getElementById("groups");
+const planEl = document.getElementById("plan");
+const planBodyEl = document.getElementById("plan-body");
+const resultsChainsEl = document.getElementById("results-chains");
 const hitsGridEl = document.getElementById("hits-grid");
-const lightbox = document.getElementById("lightbox");
-const lightboxImg = document.getElementById("lightbox-img");
-const lightboxVideo = document.getElementById("lightbox-video");
-const lightboxMeta = document.getElementById("lightbox-meta");
-const lightboxClose = document.getElementById("lightbox-close");
-const lightboxOpenVideo = document.getElementById("lightbox-open-video");
+
+const status = createStatusController(statusEl);
+const lightbox = createLightboxController({
+  dialog: document.getElementById("lightbox"),
+  img: document.getElementById("lightbox-img"),
+  video: document.getElementById("lightbox-video"),
+  meta: document.getElementById("lightbox-meta"),
+  closeBtn: document.getElementById("lightbox-close"),
+  openVideoBtn: document.getElementById("lightbox-open-video"),
+});
+lightbox.bind();
 
 let lastPayload = null;
-let activeHit = null;
 /** @type {Array<Record<string, unknown>>} */
 let rankedHits = [];
 
-function setStatus(message, isError = false) {
-  statusEl.textContent = message || "";
-  statusEl.classList.toggle("error", Boolean(isError));
+function selectResult(item, index) {
+  const chain = item.chain || {};
+  answerVideoEl.value = chain.video_id || "";
+  answerFrameEl.value = item.questioned_frame_id ?? "";
+  answerTextEl.value = item.answer || "";
+  resultsMetaEl.textContent = joinMeta([
+    `#${index + 1}`,
+    chain.video_id,
+    item.questioned_event_id,
+    `f${item.questioned_frame_id}`,
+    item.answer ? `ans ${item.answer}` : null,
+  ]);
 }
 
-function formatTime(sec) {
-  if (typeof sec !== "number" || Number.isNaN(sec)) return null;
-  const total = Math.max(0, Math.floor(sec));
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
+function renderResultChains(payload) {
+  resultsChainsEl.replaceChildren();
+  const results = payload.results || [];
+  results.forEach((item, index) => {
+    const wrap = document.createElement("section");
+    wrap.className = "qa-result-chain";
 
-function formatScore(score) {
-  if (typeof score !== "number" || Number.isNaN(score)) return "—";
-  return score.toFixed(3);
-}
+    const head = document.createElement("div");
+    head.className = "trake-chain-head";
+    const title = document.createElement("h3");
+    title.textContent = `#${index + 1} · ${item.chain?.video_id || "?"} · answer: ${item.answer || "(blank)"}`;
+    const useBtn = document.createElement("button");
+    useBtn.type = "button";
+    useBtn.className = "move-btn";
+    useBtn.textContent = "Use this result";
+    useBtn.addEventListener("click", () => selectResult(item, index));
+    head.append(title, useBtn);
+    wrap.appendChild(head);
 
-function stopVideo() {
-  lightboxVideo.pause();
-  lightboxVideo.removeAttribute("src");
-  lightboxVideo.load();
-  lightboxVideo.hidden = true;
-  lightboxImg.hidden = false;
-  lightboxOpenVideo.hidden = true;
-}
-
-function closeLightbox() {
-  stopVideo();
-  if (lightbox.open) lightbox.close();
-}
-
-function openLightbox(hit) {
-  activeHit = hit;
-  const src = hit.image_url || hit.image_data_url || "";
-  lightboxImg.src = src;
-  lightboxImg.hidden = !src;
-  lightboxVideo.hidden = true;
-  const bits = [
-    hit.video_id,
-    hit.frame_id != null ? `f${hit.frame_id}` : hit.frame_index != null ? `f${hit.frame_index}` : null,
-    formatTime(hit.timestamp_sec),
-    hit.answer ? `ans ${hit.answer}` : null,
-  ].filter(Boolean);
-  lightboxMeta.textContent = bits.join(" · ");
-  lightboxOpenVideo.hidden = !hit.video_url;
-  if (!lightbox.open) lightbox.showModal();
-}
-
-function playFromHit(hit) {
-  if (!hit?.video_url) return;
-  openLightbox(hit);
-  lightboxImg.hidden = true;
-  lightboxVideo.hidden = false;
-  lightboxVideo.src = hit.video_url;
-  const t = typeof hit.timestamp_sec === "number" ? hit.timestamp_sec : 0;
-  lightboxVideo.currentTime = Math.max(0, t);
-  lightboxVideo.play().catch(() => {});
-}
-
-function selectEvidence(hit) {
-  answerVideoEl.value = hit.video_id || "";
-  answerFrameEl.value = hit.frame_id ?? hit.frame_index ?? "";
-  if (hit.answer) answerTextEl.value = hit.answer;
-  evidenceCardEl.hidden = false;
-  evidenceImgEl.src = hit.image_url || hit.image_data_url || "";
-  evidenceMetaEl.textContent = [
-    hit.video_id,
-    hit.frame_id != null ? `f${hit.frame_id}` : `f${hit.frame_index}`,
-    formatTime(hit.timestamp_sec),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  playEvidenceBtn.hidden = !hit.video_url;
-  playEvidenceBtn.onclick = () => playFromHit(hit);
-  evidenceThumbBtn.onclick = () => openLightbox(hit);
+    const chainHost = document.createElement("div");
+    chainHost.className = "trake-chains";
+    renderChainCards(chainHost, [item.chain], {
+      highlightQuestion: true,
+      questionedEventId: item.questioned_event_id,
+      eventSpecById: eventSpecByIdFromPlan(payload.plan),
+      showEventChannels: true,
+      onEventClick: (hit) => {
+        selectResult(item, index);
+        lightbox.open({ ...hit, answer: item.answer });
+      },
+    });
+    wrap.appendChild(chainHost);
+    resultsChainsEl.appendChild(wrap);
+  });
 }
 
 function renderHits(hits) {
@@ -122,119 +103,58 @@ function renderHits(hits) {
     img.alt = `${hit.video_id} f${hit.frame_id}`;
     img.src = hit.image_url || hit.image_data_url || "";
     btn.appendChild(img);
-    btn.addEventListener("click", () => {
-      selectEvidence(hit);
-      openLightbox(hit);
-    });
+    btn.addEventListener("click", () => lightbox.open(hit));
     const body = document.createElement("div");
     body.className = "card-body";
     const title = document.createElement("h3");
     title.textContent = `#${index + 1} · ${hit.video_id || "unknown"}`;
     const detail = document.createElement("p");
-    detail.textContent = [
+    detail.textContent = joinMeta([
       hit.frame_id != null ? `f${hit.frame_id}` : null,
       hit.answer ? `ans ${hit.answer}` : null,
       `score ${formatScore(hit.score)}`,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    const useBtn = document.createElement("button");
-    useBtn.type = "button";
-    useBtn.className = "move-btn";
-    useBtn.textContent = "Use as answer";
-    useBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      selectEvidence(hit);
-    });
-    body.append(title, detail, useBtn);
+      hit.source,
+    ]);
+    body.append(title, detail);
     card.append(btn, body);
     hitsGridEl.appendChild(card);
   });
 }
 
-function renderGroups(payload) {
-  groupsEl.replaceChildren();
-  const groups = payload.frame_groups || [];
-  for (const group of groups) {
-    const section = document.createElement("section");
-    section.className = "qa-group";
-    const title = document.createElement("h3");
-    title.textContent = `Center f${group.center_frame_id} · score ${Number(group.retrieval_score || 0).toFixed(3)}`;
-    section.appendChild(title);
-    const row = document.createElement("div");
-    row.className = "qa-group-frames";
-    for (const frame of group.frames || []) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "qa-frame-btn";
-      const img = document.createElement("img");
-      img.src = frame.image_url || "";
-      img.alt = `frame ${frame.frame_id}`;
-      const label = document.createElement("span");
-      label.textContent = `f${frame.frame_id}`;
-      btn.append(img, label);
-      const hit = {
-        video_id: payload.video_id,
-        frame_id: frame.frame_id,
-        frame_index: frame.frame_id,
-        timestamp_sec: frame.timestamp_sec,
-        image_url: frame.image_url,
-        video_url: frame.video_url || payload.video_url,
-        answer: answerTextEl.value || payload.answer,
-      };
-      btn.addEventListener("click", () => {
-        selectEvidence(hit);
-        openLightbox(hit);
-      });
-      row.appendChild(btn);
-    }
-    section.appendChild(row);
-    groupsEl.appendChild(section);
-  }
-}
-
 function renderResult(payload) {
   lastPayload = payload;
   resultsEl.hidden = false;
+  renderEventPlan(planBodyEl, planEl, payload.plan);
   answerVideoEl.value = payload.video_id || "";
   answerFrameEl.value = payload.frame_id ?? "";
   answerTextEl.value = payload.answer || "";
-  resultsMetaEl.textContent = [
+  resultsMetaEl.textContent = joinMeta([
     payload.video_id ? `video ${payload.video_id}` : null,
     payload.frame_id != null ? `frame ${payload.frame_id}` : null,
-    `${(payload.hits || []).length} ranked rows`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+    `${(payload.results || []).length} chain results`,
+    `${(payload.hits || []).length} export rows`,
+  ]);
 
-  const descriptions = payload.descriptions || [];
-  descriptionsEl.hidden = descriptions.length === 0;
-  descriptionListEl.replaceChildren();
-  for (const item of descriptions) {
-    const li = document.createElement("li");
-    li.textContent = item;
-    descriptionListEl.appendChild(li);
-  }
-
-  if (payload.evidence_hit) {
-    selectEvidence({
-      ...payload.evidence_hit,
-      frame_id: payload.frame_id ?? payload.evidence_hit.frame_id,
-      answer: payload.answer,
-    });
-  } else {
-    evidenceCardEl.hidden = true;
-  }
+  renderResultChains(payload);
   renderHits(payload.hits || []);
-  renderGroups(payload);
+  if ((payload.results || []).length) {
+    selectResult(payload.results[0], 0);
+  }
 }
 
 function exportCsv() {
   const answer = (answerTextEl.value || "").trim();
   if (!answer) {
-    setStatus("Set the answer text before exporting.", true);
+    status.set("Set the answer text before exporting.", true);
     return;
   }
+  if (lastPayload?.csv_text) {
+    const queryId = sanitizeQueryId(queryIdEl.value);
+    const filename = downloadTextFile(lastPayload.csv_text, `${queryId}.csv`);
+    status.set(`Exported server CSV → ${filename}`);
+    return;
+  }
+
   const rows =
     rankedHits.length > 0
       ? rankedHits.map((hit) => [
@@ -253,7 +173,7 @@ function exportCsv() {
     ([videoId, frameId]) => videoId && Number.isFinite(frameId) && frameId >= 0
   );
   if (!valid.length) {
-    setStatus("No valid ranked rows to export.", true);
+    status.set("No valid ranked rows to export.", true);
     return;
   }
   const csv =
@@ -264,26 +184,20 @@ function exportCsv() {
         return `${videoId},${Math.trunc(frameId)},${answerCell}`;
       })
       .join("\n") + "\n";
-  const queryId = (queryIdEl.value || "query").trim().replace(/[^\w.-]+/g, "-");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${queryId || "query"}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-  setStatus(`Exported ${valid.length} rows → ${anchor.download}`);
+  const queryId = sanitizeQueryId(queryIdEl.value);
+  const filename = downloadTextFile(csv, `${queryId}.csv`);
+  status.set(`Exported ${valid.length} rows → ${filename}`);
 }
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const question = questionEl.value.trim();
   if (!question) {
-    setStatus("Enter a QA question.", true);
+    status.set("Enter a QA question.", true);
     return;
   }
   submitBtn.disabled = true;
-  setStatus("Running QA (retrieve + answer)…");
+  status.set("Running QA (event chains + answer)…");
   resultsEl.hidden = true;
   try {
     const response = await fetch("/qa", {
@@ -306,21 +220,15 @@ form.addEventListener("submit", async (event) => {
     }
     const payload = await response.json();
     renderResult(payload);
-    setStatus(`QA complete — ${(payload.hits || []).length} ranked rows.`);
+    status.set(
+      `QA complete — ${(payload.results || []).length} chains, ${(payload.hits || []).length} export rows.`
+    );
   } catch (error) {
     resultsEl.hidden = true;
-    setStatus(error instanceof Error ? error.message : String(error), true);
+    status.set(error instanceof Error ? error.message : String(error), true);
   } finally {
     submitBtn.disabled = false;
   }
 });
 
 exportBtn.addEventListener("click", exportCsv);
-lightboxClose.addEventListener("click", closeLightbox);
-lightboxOpenVideo.addEventListener("click", () => {
-  if (activeHit) playFromHit(activeHit);
-});
-lightbox.addEventListener("close", stopVideo);
-lightbox.addEventListener("click", (event) => {
-  if (event.target === lightbox) closeLightbox();
-});

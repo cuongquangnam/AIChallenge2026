@@ -1,3 +1,13 @@
+import {
+  eventSpecByIdFromPlan,
+  renderChainCards,
+  renderEventPlan,
+} from "./chains.js";
+import { downloadTextFile } from "./shared/export.js";
+import { joinMeta, sanitizeQueryId } from "./shared/format.js";
+import { createLightboxController } from "./shared/lightbox.js";
+import { createStatusController } from "./shared/status.js";
+
 const form = document.getElementById("trake-form");
 const queryEl = document.getElementById("query");
 const queryIdEl = document.getElementById("query-id");
@@ -13,97 +23,23 @@ const editorEl = document.getElementById("editor");
 const editVideoEl = document.getElementById("edit-video");
 const editEventsEl = document.getElementById("edit-events");
 const chainsEl = document.getElementById("chains");
-const lightbox = document.getElementById("lightbox");
-const lightboxImg = document.getElementById("lightbox-img");
-const lightboxVideo = document.getElementById("lightbox-video");
-const lightboxMeta = document.getElementById("lightbox-meta");
-const lightboxClose = document.getElementById("lightbox-close");
-const lightboxOpenVideo = document.getElementById("lightbox-open-video");
+
+const status = createStatusController(statusEl);
+const lightbox = createLightboxController({
+  dialog: document.getElementById("lightbox"),
+  img: document.getElementById("lightbox-img"),
+  video: document.getElementById("lightbox-video"),
+  meta: document.getElementById("lightbox-meta"),
+  closeBtn: document.getElementById("lightbox-close"),
+  openVideoBtn: document.getElementById("lightbox-open-video"),
+});
+lightbox.bind();
 
 /** @type {Array<{event_id: string, frame_index: number, image_url?: string, video_url?: string, timestamp_sec?: number}>} */
 let selectedEvents = [];
-let activeHit = null;
 /** @type {Array<Record<string, unknown>>} */
 let lastChains = [];
-
-function setStatus(message, isError = false) {
-  statusEl.textContent = message || "";
-  statusEl.classList.toggle("error", Boolean(isError));
-}
-
-function formatTime(sec) {
-  if (typeof sec !== "number" || Number.isNaN(sec)) return null;
-  const total = Math.max(0, Math.floor(sec));
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
-function stopVideo() {
-  lightboxVideo.pause();
-  lightboxVideo.removeAttribute("src");
-  lightboxVideo.load();
-  lightboxVideo.hidden = true;
-  lightboxImg.hidden = false;
-  lightboxOpenVideo.hidden = true;
-}
-
-function closeLightbox() {
-  stopVideo();
-  if (lightbox.open) lightbox.close();
-}
-
-function openLightbox(hit) {
-  activeHit = hit;
-  const src = hit.image_url || hit.image_data_url || "";
-  lightboxImg.src = src;
-  lightboxImg.hidden = !src;
-  lightboxVideo.hidden = true;
-  lightboxMeta.textContent = [
-    hit.video_id,
-    hit.event_id,
-    hit.frame_index != null ? `f${hit.frame_index}` : null,
-    formatTime(hit.timestamp_sec),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  lightboxOpenVideo.hidden = !hit.video_url;
-  if (!lightbox.open) lightbox.showModal();
-}
-
-function playFromHit(hit) {
-  if (!hit?.video_url) return;
-  openLightbox(hit);
-  lightboxImg.hidden = true;
-  lightboxVideo.hidden = false;
-  lightboxVideo.src = hit.video_url;
-  const t = typeof hit.timestamp_sec === "number" ? hit.timestamp_sec : 0;
-  lightboxVideo.currentTime = Math.max(0, t);
-  lightboxVideo.play().catch(() => {});
-}
-
-function renderPlan(plan) {
-  if (!plan) {
-    planEl.hidden = true;
-    return;
-  }
-  planEl.hidden = false;
-  planBodyEl.replaceChildren();
-  if (plan.context) {
-    const dt = document.createElement("dt");
-    dt.textContent = "context";
-    const dd = document.createElement("dd");
-    dd.textContent = plan.context;
-    planBodyEl.append(dt, dd);
-  }
-  for (const event of plan.events || []) {
-    const dt = document.createElement("dt");
-    dt.textContent = event.event_id;
-    const dd = document.createElement("dd");
-    dd.textContent = event.visual || event.ocr || event.asr || "—";
-    planBodyEl.append(dt, dd);
-  }
-}
+let lastPlan = null;
 
 function syncEditorFromSelection() {
   editorEl.hidden = selectedEvents.length === 0;
@@ -131,56 +67,30 @@ function syncEditorFromSelection() {
 
 function selectChain(chain) {
   editVideoEl.value = chain.video_id || "";
-  selectedEvents = (chain.events || []).map((event) => ({ ...event, video_id: chain.video_id }));
+  selectedEvents = (chain.events || []).map((event) => ({
+    ...event,
+    video_id: chain.video_id,
+  }));
   syncEditorFromSelection();
 }
 
 function renderChains(payload) {
+  lastPlan = payload.plan || null;
   lastChains = payload.chains || [];
-  chainsEl.replaceChildren();
-  lastChains.forEach((chain, index) => {
-    const card = document.createElement("article");
-    card.className = "trake-chain";
-    const head = document.createElement("div");
-    head.className = "trake-chain-head";
-    const title = document.createElement("h3");
-    title.textContent = `#${index + 1} · ${chain.video_id} · score ${Number(chain.score || 0).toFixed(3)}`;
-    const useBtn = document.createElement("button");
-    useBtn.type = "button";
-    useBtn.className = "move-btn";
-    useBtn.textContent = "Use this chain";
-    useBtn.addEventListener("click", () => {
+  renderChainCards(chainsEl, lastChains, {
+    layout: "timeline",
+    eventSpecById: eventSpecByIdFromPlan(lastPlan),
+    showEventChannels: true,
+    onEventClick: (hit) => lightbox.open(hit),
+    onChainAction: (chain) => {
       selectChain(chain);
-      setStatus(`Selected chain ${chain.video_id}`);
-    });
-    head.append(title, useBtn);
-    card.appendChild(head);
-
-    const timeline = document.createElement("div");
-    timeline.className = "trake-timeline";
-    for (const event of chain.events || []) {
-      const cell = document.createElement("button");
-      cell.type = "button";
-      cell.className = "trake-event";
-      const img = document.createElement("img");
-      img.src = event.image_url || "";
-      img.alt = `${event.event_id} frame`;
-      const label = document.createElement("span");
-      label.textContent = `${event.event_id} · f${event.frame_index}`;
-      cell.append(img, label);
-      const hit = { ...event, video_id: chain.video_id };
-      cell.addEventListener("click", () => openLightbox(hit));
-      cell.addEventListener("dblclick", () => playFromHit(hit));
-      timeline.appendChild(cell);
-    }
-    card.appendChild(timeline);
-    chainsEl.appendChild(card);
+      status.set(`Selected chain ${chain.video_id}`);
+    },
+    chainActionLabel: "Use this chain",
   });
 }
 
 function exportCsv() {
-  const chains = document.querySelectorAll(".trake-chain");
-  // Prefer edited selection; also export all returned chains as ranked rows.
   const lines = [];
   const videoId = (editVideoEl.value || "").trim();
   if (videoId && selectedEvents.length) {
@@ -201,30 +111,24 @@ function exportCsv() {
     }
   }
   if (!lines.length) {
-    setStatus("Select or run a chain before exporting.", true);
+    status.set("Select or run a chain before exporting.", true);
     return;
   }
   const csv = lines.join("\n") + "\n";
-  const queryId = (queryIdEl.value || "query").trim().replace(/[^\w.-]+/g, "-");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${queryId || "query"}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-  setStatus(`Exported ${lines.length} chain rows → ${anchor.download}`);
+  const queryId = sanitizeQueryId(queryIdEl.value);
+  const filename = downloadTextFile(csv, `${queryId}.csv`);
+  status.set(`Exported ${lines.length} chain rows → ${filename}`);
 }
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const query = queryEl.value.trim();
   if (!query) {
-    setStatus("Paste a TRAKE query with E1…En events.", true);
+    status.set("Paste a TRAKE query with E1…En events.", true);
     return;
   }
   submitBtn.disabled = true;
-  setStatus("Running TRAKE…");
+  status.set("Running TRAKE…");
   resultsEl.hidden = true;
   try {
     const response = await fetch("/trake", {
@@ -241,13 +145,11 @@ form.addEventListener("submit", async (event) => {
     }
     const payload = await response.json();
     resultsEl.hidden = false;
-    resultsMetaEl.textContent = [
+    resultsMetaEl.textContent = joinMeta([
       `${(payload.chains || []).length} chains`,
       payload.csv_row ? `best ${payload.csv_row}` : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    renderPlan(payload.plan);
+    ]);
+    renderEventPlan(planBodyEl, planEl, payload.plan);
     renderChains(payload);
     if ((payload.chains || []).length) {
       selectChain(payload.chains[0]);
@@ -255,21 +157,13 @@ form.addEventListener("submit", async (event) => {
       editorEl.hidden = true;
       selectedEvents = [];
     }
-    setStatus("TRAKE complete — review chains, edit frames if needed, export.");
+    status.set("TRAKE complete — review chains, edit frames if needed, export.");
   } catch (error) {
     resultsEl.hidden = true;
-    setStatus(error instanceof Error ? error.message : String(error), true);
+    status.set(error instanceof Error ? error.message : String(error), true);
   } finally {
     submitBtn.disabled = false;
   }
 });
 
 exportBtn.addEventListener("click", exportCsv);
-lightboxClose.addEventListener("click", closeLightbox);
-lightboxOpenVideo.addEventListener("click", () => {
-  if (activeHit) playFromHit(activeHit);
-});
-lightbox.addEventListener("close", stopVideo);
-lightbox.addEventListener("click", (event) => {
-  if (event.target === lightbox) closeLightbox();
-});

@@ -131,6 +131,43 @@ class SearchService:
         )
         return SearchResponse(query=query, mode="mixed", hits=fused, plan=plan)
 
+    def search_event_spec(
+        self,
+        event,
+        *,
+        limit: int = 50,
+        vector_name: str = "siglip",
+    ) -> list[SearchHit]:
+        """Mixed OCR/ASR/visual retrieval for one event spec (no LLM planner)."""
+        from video_retrieval.models import EventSpec
+
+        if not isinstance(event, EventSpec):
+            raise TypeError("event must be EventSpec")
+
+        channel_limit = max(limit * _CHANNEL_LIMIT_FACTOR, limit)
+        ocr_hits: list[SearchHit] = []
+        asr_hits: list[SearchHit] = []
+        visual_hits: list[SearchHit] = []
+        if event.ocr:
+            ocr_hits = self.es.search(event.ocr, limit=channel_limit, source="ocr")
+        if event.asr:
+            asr_hits = self.es.search(event.asr, limit=channel_limit, source="asr")
+        visual_text = (event.visual or event.description or "").strip()
+        if visual_text:
+            visual_hits = self.qdrant.search(
+                self.visual.encode_text(visual_text),
+                vector_name=vector_name,
+                limit=channel_limit,
+            )
+        weights = _event_weights(event)
+        return fuse_frame_scores(
+            ocr_hits=ocr_hits,
+            asr_hits=asr_hits,
+            visual_hits=visual_hits,
+            weights=weights,
+            limit=limit,
+        )
+
 
 def fuse_frame_scores(
     *,
@@ -186,6 +223,19 @@ def fuse_frame_scores(
 
     fused.sort(key=lambda item: item.score, reverse=True)
     return fused[:limit]
+
+
+def _event_weights(event) -> dict[str, float]:
+    channels = {
+        "ocr": bool(event.ocr),
+        "asr": bool(event.asr),
+        "visual": bool((event.visual or event.description or "").strip()),
+    }
+    active = sum(1 for value in channels.values() if value)
+    if active == 0:
+        return {"ocr": 1 / 3, "asr": 1 / 3, "visual": 1 / 3}
+    weight = 1.0 / active
+    return {key: weight if channels[key] else 0.0 for key in ("ocr", "asr", "visual")}
 
 
 def _rrf_fuse(rankings: list[list[SearchHit]], *, limit: int, k: int = 60) -> list[SearchHit]:

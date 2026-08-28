@@ -17,11 +17,28 @@ Return exactly this JSON shape:
 {{"descriptions":["description 1","description 2"]}}"""
 
 
-ANSWER_SYSTEM_PROMPT = """You answer a question using only the supplied video frames.
-Return JSON only. Select one frame_id that best supports the answer.
-Read on-screen numbers, signs, and text carefully. Prefer a short concrete answer
-(e.g. a number or place name) when visible. Only use an empty answer if nothing
+ANSWER_SYSTEM_PROMPT = """You answer a question using only the supplied video frame.
+Return JSON only. Read on-screen numbers, signs, and text carefully. Prefer a short concrete
+answer (e.g. a number or place name) when visible. Only use an empty answer if nothing
 relevant is visible at all."""
+
+
+SINGLE_FRAME_ANSWER_PROMPT = """You answer a question using only the single video frame provided.
+Return JSON only with a short concrete answer when visible."""
+
+
+def build_single_frame_answer_prompt(
+    question: str,
+    video_id: str,
+    frame_id: int,
+    event_description: str = "",
+) -> str:
+    context = f"Event context: {event_description}\n" if event_description else ""
+    return f"""Question: {question}
+{context}The image is frame_id={frame_id} from video_id={video_id}.
+
+Return exactly this JSON shape:
+{{"video_id":"{video_id}","frame_id":{frame_id},"answer":"..."}}"""
 
 
 def build_answer_prompt(

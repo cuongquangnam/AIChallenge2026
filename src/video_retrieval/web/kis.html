@@ -27,7 +27,7 @@
         <p class="brand">Framefind · KIS</p>
         <h1>Textual known-item search</h1>
         <p class="lede">
-          Find the described moment, reorder candidates, then export
+          Extract ordered events, align chains in video, export
           <code>video_id,frame_idx</code> CSV (100 rows).
         </p>
 
@@ -43,16 +43,7 @@
 
           <div class="controls">
             <label class="field">
-              <span>Mode</span>
-              <select id="mode" name="mode">
-                <option value="mixed" selected>Mixed</option>
-                <option value="visual">Visual</option>
-                <option value="ocr">OCR</option>
-                <option value="asr">ASR</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Results</span>
+              <span>Export rows</span>
               <select id="limit" name="limit">
                 <option value="24">24</option>
                 <option value="48">48</option>
@@ -130,10 +121,13 @@
           </div>
         </div>
         <aside class="plan" id="plan" hidden>
-          <h3>Planner</h3>
+          <h3>Event plan</h3>
           <dl id="plan-body"></dl>
         </aside>
-        <div class="grid" id="grid"></div>
+        <h2 class="section-title">Aligned chains</h2>
+        <div id="chains" class="trake-chains kis-chains"></div>
+        <h2 class="section-title">Export preview (flat frames)</h2>
+        <div class="grid kis-export-grid" id="grid"></div>
       </section>
     </main>
 
@@ -154,6 +148,6 @@
       <p id="lightbox-meta"></p>
     </dialog>
 
-    <script src="/static/kis.js"></script>
+    <script type="module" src="/static/kis.js"></script>
   </body>
 </html>

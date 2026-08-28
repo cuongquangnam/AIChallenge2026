@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Protocol
 
 from video_retrieval.config import Settings
@@ -10,8 +11,10 @@ from video_retrieval.models import QAFrameGroup
 from video_retrieval.qa.prompts import (
     ANSWER_SYSTEM_PROMPT,
     DECOMPOSITION_SYSTEM_PROMPT,
+    SINGLE_FRAME_ANSWER_PROMPT,
     build_answer_prompt,
     build_decomposition_prompt,
+    build_single_frame_answer_prompt,
 )
 from video_retrieval.text.gemini_config import gemini_generate_config
 from video_retrieval.text.gemini_logging import log_gemini_failure
@@ -43,6 +46,16 @@ class QAModel(Protocol):
         frame_groups: list[QAFrameGroup],
     ) -> dict[str, object]: ...
 
+    def answer_single_frame(
+        self,
+        *,
+        question: str,
+        video_id: str,
+        frame_id: int,
+        image_path: Path | None,
+        event_description: str = "",
+    ) -> str: ...
+
 
 class UnconfiguredQAModel:
     def _raise(self) -> None:
@@ -64,6 +77,18 @@ class UnconfiguredQAModel:
     ) -> dict[str, object]:
         self._raise()
         return {}
+
+    def answer_single_frame(
+        self,
+        *,
+        question: str,
+        video_id: str,
+        frame_id: int,
+        image_path: Path | None,
+        event_description: str = "",
+    ) -> str:
+        self._raise()
+        return ""
 
 
 class GeminiQAModel:
@@ -99,6 +124,38 @@ class GeminiQAModel:
         if not cleaned:
             raise InvalidQAModelResponseError("LLM returned no retrieval descriptions")
         return list(dict.fromkeys(cleaned))
+
+    def answer_single_frame(
+        self,
+        *,
+        question: str,
+        video_id: str,
+        frame_id: int,
+        image_path: Path | None,
+        event_description: str = "",
+    ) -> str:
+        from PIL import Image
+
+        parts: list = [
+            self._types.Part.from_text(text=SINGLE_FRAME_ANSWER_PROMPT),
+            self._types.Part.from_text(
+                text=build_single_frame_answer_prompt(
+                    question,
+                    video_id,
+                    frame_id,
+                    event_description=event_description,
+                )
+            ),
+        ]
+        if image_path is not None and image_path.is_file():
+            image = Image.open(image_path)
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            parts.append(self._types.Part.from_text(text=f"frame_id={frame_id}"))
+            parts.append(self._types.Part(image))
+        raw = self._generate_parts(parts)
+        payload = _parse_json_object(raw)
+        return str(payload.get("answer") or "").strip()
 
     def answer_with_frames(
         self,

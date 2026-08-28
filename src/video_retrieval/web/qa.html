@@ -90,31 +90,16 @@
           </label>
         </div>
 
-        <aside class="plan" id="descriptions" hidden>
-          <h3>Retrieval descriptions</h3>
-          <ul id="description-list"></ul>
+        <aside class="plan" id="plan" hidden>
+          <h3>Event plan</h3>
+          <dl id="plan-body"></dl>
         </aside>
 
-        <div class="qa-evidence" id="evidence">
-          <article class="qa-evidence-card" id="evidence-card" hidden>
-            <button type="button" class="thumb-btn" id="evidence-thumb-btn">
-              <img id="evidence-img" alt="Evidence frame" />
-            </button>
-            <div>
-              <h3>Selected evidence</h3>
-              <p id="evidence-meta"></p>
-              <button type="button" id="play-evidence" class="move-btn" hidden>
-                Play from evidence
-              </button>
-            </div>
-          </article>
-        </div>
+        <h2 class="section-title">Chain results</h2>
+        <div id="results-chains" class="trake-chains"></div>
 
-        <h2 class="section-title">Ranked answers</h2>
+        <h2 class="section-title">Ranked export rows</h2>
         <div class="grid" id="hits-grid"></div>
-
-        <h2 class="section-title">Candidate groups</h2>
-        <div class="qa-groups" id="groups"></div>
       </section>
     </main>
 
@@ -132,6 +117,6 @@
       <p id="lightbox-meta"></p>
     </dialog>
 
-    <script src="/static/qa.js"></script>
+    <script type="module" src="/static/qa.js"></script>
   </body>
 </html>

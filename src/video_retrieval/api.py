@@ -13,15 +13,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from video_retrieval.config import Settings, get_settings
+from video_retrieval.events.export import chains_to_csv_lines
 from video_retrieval.pipeline.indexer import VideoIndexer
 from video_retrieval.qa.frames import QAFrameExtractionError, VideoNotFoundForQAError
 from video_retrieval.qa.llm import (
     InvalidQAModelResponseError,
     QAModelNotConfiguredError,
 )
-from video_retrieval.qa.retrieval import NoQACandidatesError
 from video_retrieval.qa.service import QAService
-from video_retrieval.search.kis import search_to_rows
+from video_retrieval.search.kis_service import KisService
 from video_retrieval.search.service import SearchService
 from video_retrieval.search.trake import TrakeService
 
@@ -232,6 +232,25 @@ def _video_url_for_hit(hit: dict[str, Any], *, available: dict[str, bool] | None
     return f"/media/videos/{quote(key)}" if exists else None
 
 
+def _enrich_chains(payload: dict[str, Any]) -> dict[str, Any]:
+    video_available: dict[str, bool] = {}
+    for chain in payload.get("chains") or []:
+        video_id = chain.get("video_id")
+        chain["video_url"] = _video_url_for_hit(
+            {"video_id": video_id}, available=video_available
+        )
+        for event in chain.get("events") or []:
+            event["video_id"] = video_id
+            event["image_url"] = _image_url_for_hit(
+                {
+                    "video_id": video_id,
+                    "keyframe_path": event.get("keyframe_path"),
+                }
+            )
+            event["video_url"] = chain.get("video_url")
+    return payload
+
+
 def _enrich_search_payload(payload: dict[str, Any]) -> dict[str, Any]:
     hits = []
     video_available: dict[str, bool] = {}
@@ -272,18 +291,19 @@ def search(body: SearchRequest):
 
 @app.post("/kis")
 def kis_search(body: KisRequest):
-    service = SearchService(settings)
     try:
-        response, rows = search_to_rows(
-            service,
-            body.query,
-            mode=body.mode,
-            limit=body.limit,
-        )
+        result = KisService(settings).run(body.query, limit=body.limit)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    payload = _enrich_search_payload(response.model_dump(mode="json"))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("KIS backend error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"KIS backend error: {exc}") from exc
+
+    payload = result.model_dump(mode="json")
+    payload = _enrich_chains(payload)
+    payload["hits"] = _enrich_search_payload({"hits": payload.get("hits") or []})["hits"]
     payload["query_id"] = (body.query_id or "").strip()
+    rows = result.submission_rows
     payload["submission_rows"] = [
         {"video_id": video_id, "frame_index": frame_idx} for video_id, frame_idx in rows
     ]
@@ -297,7 +317,6 @@ def answer_question(body: QARequest):
         result = QAService(settings).answer(
             body.question,
             limit=body.limit,
-            group_count=body.group_count,
             frame_radius=body.frame_radius,
         )
     except QAModelNotConfiguredError as exc:
@@ -305,9 +324,11 @@ def answer_question(body: QARequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except VideoNotFoundForQAError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (NoQACandidatesError, QAFrameExtractionError, InvalidQAModelResponseError) as exc:
+    except (QAFrameExtractionError, InvalidQAModelResponseError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.error("QA backend error: %s", exc)
@@ -315,32 +336,44 @@ def answer_question(body: QARequest):
 
     payload = result.model_dump(mode="json")
     video_available: dict[str, bool] = {}
-    for group in payload.get("frame_groups") or []:
-        group_video = group.get("video_id") or result.video_id
-        video_url = _video_url_for_hit({"video_id": group_video}, available=video_available)
-        for frame in group.get("frames") or []:
-            path = frame.get("path")
-            if path and Path(str(path)).is_file():
-                frame["image_url"] = f"/media/qa-frames?path={quote(str(path))}"
-            frame["video_url"] = video_url
+    enriched_results = []
+    for item in payload.get("results") or []:
+        chain = dict(item.get("chain") or {})
+        video_id = chain.get("video_id")
+        video_url = _video_url_for_hit({"video_id": video_id}, available=video_available)
+        chain["video_url"] = video_url
+        for event in chain.get("events") or []:
+            event["video_id"] = video_id
+            event["image_url"] = _image_url_for_hit(
+                {
+                    "video_id": video_id,
+                    "keyframe_path": event.get("keyframe_path"),
+                }
+            )
+            event["video_url"] = video_url
+            if event.get("event_id") == item.get("questioned_event_id"):
+                event["is_question_target"] = True
+        item = dict(item)
+        item["chain"] = chain
+        enriched_results.append(item)
+    payload["results"] = enriched_results
 
-    # Enrich ranked hits with media URLs when possible.
     enriched_hits = []
     for hit in payload.get("hits") or []:
         item = dict(hit)
-        video_id = item.get("video_id")
-        item["video_url"] = _video_url_for_hit({"video_id": video_id}, available=video_available)
-        # Prefer sampled evidence image for the best frame.
-        if (
-            video_id == result.video_id
-            and item.get("frame_id") == result.frame_id
-        ):
-            for group in result.frame_groups:
-                for frame in group.frames:
-                    if frame.frame_id == result.frame_id and frame.path.is_file():
-                        item["image_url"] = f"/media/qa-frames?path={quote(str(frame.path))}"
-                        item["timestamp_sec"] = frame.timestamp_sec
-                        break
+        item["video_url"] = _video_url_for_hit(
+            {"video_id": item.get("video_id")}, available=video_available
+        )
+        item["image_url"] = _image_url_for_hit(
+            {
+                "video_id": item.get("video_id"),
+                "keyframe_path": _keyframe_for_frame(
+                    enriched_results,
+                    item.get("video_id"),
+                    item.get("frame_id"),
+                ),
+            }
+        )
         enriched_hits.append(item)
     payload["hits"] = enriched_hits
     payload["video_url"] = _video_url_for_hit(
@@ -359,6 +392,23 @@ def answer_question(body: QARequest):
         "answer": result.answer,
     }
     return payload
+
+
+def _keyframe_for_frame(
+    results: list[dict[str, Any]],
+    video_id: str | None,
+    frame_id: int | None,
+) -> str | None:
+    if not video_id or frame_id is None:
+        return None
+    for item in results:
+        chain = item.get("chain") or {}
+        if chain.get("video_id") != video_id:
+            continue
+        for event in chain.get("events") or []:
+            if event.get("frame_index") == frame_id:
+                return event.get("keyframe_path")
+    return None
 
 
 def _qa_rows_to_csv(rows: list[tuple[str, int, str]]) -> str:
@@ -380,26 +430,8 @@ def trake_search(body: TrakeRequest):
         raise HTTPException(status_code=502, detail=f"TRAKE backend error: {exc}") from exc
 
     payload = result.model_dump(mode="json")
-    video_available: dict[str, bool] = {}
-    csv_lines: list[str] = []
-    for chain in payload.get("chains") or []:
-        video_id = chain.get("video_id")
-        chain["video_url"] = _video_url_for_hit(
-            {"video_id": video_id}, available=video_available
-        )
-        frames: list[str] = []
-        for event in chain.get("events") or []:
-            event["video_id"] = video_id
-            event["image_url"] = _image_url_for_hit(
-                {
-                    "video_id": video_id,
-                    "keyframe_path": event.get("keyframe_path"),
-                }
-            )
-            event["video_url"] = chain["video_url"]
-            frames.append(str(event.get("frame_index")))
-        if video_id and frames:
-            csv_lines.append(f"{video_id},{','.join(frames)}")
+    payload = _enrich_chains(payload)
+    csv_lines = chains_to_csv_lines(result.chains)
     if csv_lines:
         payload["csv_text"] = "\n".join(csv_lines) + "\n"
         payload["csv_row"] = csv_lines[0]

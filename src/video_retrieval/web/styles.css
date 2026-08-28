@@ -454,6 +454,30 @@ button[type="submit"]:disabled {
   word-break: break-word;
 }
 
+.plan dd.plan-event-details {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.plan-channel {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.plan-channel-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.plan-channel-text {
+  font-size: 0.88rem;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .plan .plan-empty {
   color: var(--muted);
   font-style: italic;
@@ -852,6 +876,21 @@ button[type="submit"]:disabled {
   margin-top: 0.75rem;
 }
 
+.trake-chain-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.qa-question-event {
+  outline: 2px solid var(--accent, #e8a838);
+  outline-offset: 2px;
+}
+
+.qa-result-chain {
+  margin-bottom: 1.25rem;
+}
+
 .trake-chains {
   display: grid;
   gap: 1.25rem;
@@ -878,6 +917,77 @@ button[type="submit"]:disabled {
   font-family: var(--font-display);
   font-weight: 400;
   font-size: 1.25rem;
+}
+
+.kis-chains .trake-event {
+  width: 108px;
+  max-width: 108px;
+  flex: 0 0 auto;
+  padding: 0.3rem;
+}
+
+.kis-chains .trake-event img {
+  height: 58px;
+  aspect-ratio: auto;
+}
+
+.kis-chains .trake-event span {
+  font-size: 0.68rem;
+  margin-top: 0.2rem;
+}
+
+.trake-event-spec {
+  margin-top: 0.25rem;
+  display: grid;
+  gap: 0.12rem;
+}
+
+.trake-event-spec-line {
+  display: block;
+  font-size: 0.62rem;
+  line-height: 1.3;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kis-export-grid {
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 0.65rem;
+}
+
+.kis-export-grid .thumb {
+  aspect-ratio: 16 / 9;
+  max-height: 74px;
+}
+
+.kis-export-grid .meta {
+  padding: 0.45rem 0.55rem 0.4rem;
+}
+
+.kis-export-grid .meta strong {
+  font-size: 0.82rem;
+}
+
+.kis-export-grid .meta span {
+  font-size: 0.7rem;
+}
+
+.kis-export-grid .drag-handle {
+  font-size: 0.72rem;
+  padding: 0.28rem 0.45rem;
+}
+
+.kis-export-grid .card-actions {
+  padding: 0 0.55rem 0.55rem;
+  gap: 0.35rem;
+}
+
+.kis-export-grid .play-btn,
+.kis-export-grid .remove-btn {
+  font-size: 0.72rem;
+  padding: 0.35rem 0.5rem;
 }
 
 .hint {
