@@ -8,7 +8,9 @@ from typing import Literal
 
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.models import EventChainPlan, EventSpec
+from video_retrieval.text.gemini_client import get_gemini_client
 from video_retrieval.text.gemini_logging import log_gemini_failure
+from video_retrieval.text.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -76,21 +78,17 @@ _TASK_RULES = {
 
 
 class EventChainExtractor:
-    def __init__(self, settings: Settings | None = None):
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        llm: LLMClient | None = None,
+    ):
         self.settings = settings or get_settings()
-        self._client = None
-        self._types = None
-        if self.settings.gemini_api_key and self.settings.query_planner != "heuristic":
-            self._init_gemini()
-
-    def _init_gemini(self) -> None:
-        try:
-            from google import genai
-            from google.genai import types
-        except ImportError:
-            return
-        self._client = genai.Client(api_key=self.settings.gemini_api_key)
-        self._types = types
+        self._llm = llm
+        if self._llm is None and self.settings.gemini_api_key:
+            if self.settings.query_planner != "heuristic":
+                self._llm = get_gemini_client(self.settings)
 
     def extract(
         self,
@@ -102,7 +100,7 @@ class EventChainExtractor:
         if not query:
             return EventChainPlan(task=task, events=[])
 
-        if self._client is not None:
+        if self._llm is not None:
             try:
                 return self._extract_gemini(query, task=task)
             except Exception as exc:
@@ -121,22 +119,16 @@ class EventChainExtractor:
         *,
         task: Literal["kis", "qa", "trake"],
     ) -> EventChainPlan:
-        assert self._client is not None
-        from video_retrieval.text.gemini_config import gemini_generate_config
-
+        assert self._llm is not None
         prompt = _EXTRACT_PROMPT.format(
             task_rules=_TASK_RULES[task],
             query=query,
         )
-        kwargs: dict = {
-            "model": self.settings.gemini_model,
-            "contents": prompt,
-        }
-        config = gemini_generate_config(self.settings.gemini_model, json_response=True)
-        if config is not None:
-            kwargs["config"] = config
-        response = self._client.models.generate_content(**kwargs)
-        raw = (response.text or "").strip()
+        raw = self._llm.generate_text(
+            prompt,
+            json_response=True,
+            component=f"{task} event extractor",
+        )
         return parse_event_plan(raw, fallback_query=query, task=task)
 
 

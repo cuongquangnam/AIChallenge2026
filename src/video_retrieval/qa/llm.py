@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -17,10 +15,8 @@ from video_retrieval.qa.prompts import (
     build_batch_frame_answer_prompt,
     build_decomposition_prompt,
 )
-from video_retrieval.text.gemini_config import gemini_generate_config
-from video_retrieval.text.gemini_logging import log_gemini_failure
-
-logger = logging.getLogger(__name__)
+from video_retrieval.text.gemini_client import get_gemini_client
+from video_retrieval.text.llm import LLMClient
 
 
 @dataclass(frozen=True)
@@ -118,13 +114,15 @@ class UnconfiguredQAModel:
 
 
 class GeminiQAModel:
-    """Multimodal Q&A via the project's Gemini client (PIL image parts)."""
+    """Multimodal Q&A via the shared Gemini client (PIL image parts)."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, llm: LLMClient | None = None):
         if not settings.gemini_api_key:
             raise QAModelNotConfiguredError("GEMINI_API_KEY is required for Q&A")
+        client = llm or get_gemini_client(settings)
+        if client is None:
+            raise QAModelNotConfiguredError("GEMINI_API_KEY is required for Q&A")
         try:
-            from google import genai
             from google.genai import types
         except ImportError as exc:
             raise QAModelNotConfiguredError(
@@ -132,8 +130,8 @@ class GeminiQAModel:
             ) from exc
 
         self.settings = settings
-        self.model = settings.gemini_model
-        self._client = genai.Client(api_key=settings.gemini_api_key)
+        self.model = client.model
+        self._llm = client
         self._types = types
 
     def decompose_question(self, question: str) -> list[str]:
@@ -274,51 +272,11 @@ class GeminiQAModel:
         return self._generate_parts([self._types.Part.from_text(text=prompt)])
 
     def _generate_parts(self, parts: list) -> str:
-        kwargs: dict = {
-            "model": self.model,
-            "contents": [self._types.Content(role="user", parts=parts)],
-        }
-        config = gemini_generate_config(self.model, json_response=True)
-        if config is not None:
-            kwargs["config"] = config
-
-        max_retries = max(1, int(self.settings.gemini_max_retries))
-        delay = 1.5
-        last_exc: Exception | None = None
-        for attempt in range(max_retries):
-            try:
-                response = self._client.models.generate_content(**kwargs)
-                return (response.text or "").strip()
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                message = str(exc)
-                retryable = any(
-                    token in message
-                    for token in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "high demand")
-                )
-                if not retryable or attempt >= max_retries - 1:
-                    log_gemini_failure(
-                        component="QA generate_content",
-                        model=self.model,
-                        exc=exc,
-                        attempt=attempt + 1,
-                        max_attempts=max_retries,
-                        fallback="raise to caller",
-                    )
-                    raise
-                logger.warning(
-                    "Gemini QA call failed (model=%s, attempt=%s/%s, error_type=%s), retrying in %.1fs: %r",
-                    self.model,
-                    attempt + 1,
-                    max_retries,
-                    type(exc).__name__,
-                    delay,
-                    exc,
-                )
-                time.sleep(delay)
-                delay = min(delay * 2, 12)
-        assert last_exc is not None
-        raise last_exc
+        return self._llm.generate_parts(
+            parts,
+            json_response=True,
+            component="QA generate_content",
+        )
 
 
 def create_qa_model(settings: Settings) -> QAModel:

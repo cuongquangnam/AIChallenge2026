@@ -1,5 +1,4 @@
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 import json
 
@@ -8,18 +7,13 @@ import pytest
 from video_retrieval.config import Settings
 from video_retrieval.models import AudioTrack, FrameRole, KeyFrame
 from video_retrieval.text.asr import ASREngine
-from video_retrieval.text.ocr import (
-    OCREngine,
-    _GeminiRateLimiter,
-    _daily_quota_message,
-    _gemini_generation_config,
-    _is_daily_quota_exhausted,
-    _is_retryable_api_error,
-    _model_unavailable_message,
-    _parse_batch_ocr_response,
-    _retry_after_seconds,
-)
+from video_retrieval.text.ocr import OCREngine, _parse_batch_ocr_response
+from video_retrieval.text.gemini_config import gemini_generate_config
 from tests.helpers import write_dummy_image
+
+
+def _mock_ocr_engine(settings: Settings) -> OCREngine:
+    return OCREngine(settings, client=MagicMock())
 
 
 @pytest.mark.unit
@@ -61,7 +55,7 @@ def test_extract_from_keyframes_only_processes_middle_frames(
 
     monkeypatch.setattr(OCREngine, "_extract_gemini_batch", fake_extract_gemini_batch)
 
-    ocr = OCREngine(settings)
+    ocr = _mock_ocr_engine(settings)
     middle = KeyFrame(
         video_id="clip",
         shot_index=0,
@@ -98,7 +92,7 @@ def test_extract_from_keyframes_batches_gemini_requests(
 
     monkeypatch.setattr(OCREngine, "_extract_gemini_batch", fake_extract_gemini_batch)
 
-    ocr = OCREngine(settings)
+    ocr = _mock_ocr_engine(settings)
     keyframes = [
         KeyFrame(
             video_id="clip",
@@ -139,194 +133,8 @@ def test_parse_batch_ocr_response_handles_invalid_json() -> None:
 
 
 @pytest.mark.unit
-def test_is_daily_quota_exhausted_detects_per_day_limit() -> None:
-    from google.genai import errors as genai_errors
-
-    exc = genai_errors.ClientError(
-        429,
-        {
-            "error": {
-                "message": "quota exceeded",
-                "details": [
-                    {
-                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
-                        "violations": [
-                            {
-                                "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
-                            }
-                        ],
-                    }
-                ],
-            }
-        },
-    )
-    assert _is_daily_quota_exhausted(exc) is True
-
-
-@pytest.mark.unit
-def test_retry_after_seconds_reads_retry_info() -> None:
-    from google.genai import errors as genai_errors
-
-    exc = genai_errors.ClientError(
-        429,
-        {
-            "error": {
-                "message": "Please retry in 57.755254636s.",
-                "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "57s"}],
-            }
-        },
-    )
-    assert _retry_after_seconds(exc) == 57.0
-
-
-@pytest.mark.unit
-def test_daily_quota_message_is_actionable() -> None:
-    from google.genai import errors as genai_errors
-
-    exc = genai_errors.ClientError(429, {"error": {"message": "quota exceeded"}})
-    message = _daily_quota_message(exc)
-    assert "daily request quota" in message.lower()
-    assert "GEMINI_MODEL" in message
-
-
-@pytest.mark.unit
-def test_gemini_rate_limiter_waits_between_requests(monkeypatch: pytest.MonkeyPatch) -> None:
-    limiter = _GeminiRateLimiter(requests_per_minute=5)
-    assert limiter.min_interval == 12.0
-
-    monotonic_values = iter([0.0, 0.0, 5.0, 5.0])
-    slept: list[float] = []
-
-    monkeypatch.setattr("video_retrieval.text.ocr.time.monotonic", lambda: next(monotonic_values))
-    monkeypatch.setattr(
-        "video_retrieval.text.ocr.time.sleep",
-        lambda seconds: slept.append(seconds),
-    )
-
-    limiter.wait()
-    limiter.wait()
-    assert slept == [7.0]
-
-
-@pytest.mark.unit
-def test_generate_with_retries_on_rate_limit(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    from google.genai import errors as genai_errors
-
-    settings.ocr_backend = "gemini"
-    settings.gemini_api_key = "test-key"
-    settings.gemini_max_retries = 3
-
-    ocr = OCREngine(settings)
-    rate_limiter = MagicMock()
-    rate_limiter.min_interval = 12.0
-    ocr._rate_limiter = rate_limiter
-    ocr._client = MagicMock()
-
-    response_ok = SimpleNamespace(text="hello")
-    ocr._client.models.generate_content.side_effect = [
-        genai_errors.APIError(429, {"error": {"message": "rate limit"}}),
-        response_ok,
-    ]
-
-    slept: list[float] = []
-    monkeypatch.setattr("video_retrieval.text.ocr.time.sleep", lambda seconds: slept.append(seconds))
-
-    text = ocr._generate_with_retries({"model": "gemini-2.0-flash"})
-    assert text == "hello"
-    assert ocr._client.models.generate_content.call_count == 2
-    assert slept == [12.0]
-
-
-@pytest.mark.unit
-def test_generate_with_retries_on_unavailable(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    from google.genai import errors as genai_errors
-
-    settings.ocr_backend = "gemini"
-    settings.gemini_api_key = "test-key"
-    settings.gemini_max_retries = 3
-
-    ocr = OCREngine(settings)
-    rate_limiter = MagicMock()
-    rate_limiter.min_interval = 12.0
-    ocr._rate_limiter = rate_limiter
-    ocr._client = MagicMock()
-
-    response_ok = SimpleNamespace(text="recovered")
-    ocr._client.models.generate_content.side_effect = [
-        genai_errors.ServerError(
-            503,
-            {
-                "error": {
-                    "code": 503,
-                    "message": "This model is currently experiencing high demand.",
-                    "status": "UNAVAILABLE",
-                }
-            },
-        ),
-        response_ok,
-    ]
-
-    slept: list[float] = []
-    monkeypatch.setattr("video_retrieval.text.ocr.time.sleep", lambda seconds: slept.append(seconds))
-
-    text = ocr._generate_with_retries({"model": "gemini-3.1-flash-lite"})
-    assert text == "recovered"
-    assert ocr._client.models.generate_content.call_count == 2
-    assert slept == [15.0]
-
-
-@pytest.mark.unit
-def test_generate_with_retries_raises_model_unavailable(settings: Settings) -> None:
-    from google.genai import errors as genai_errors
-
-    settings.ocr_backend = "gemini"
-    settings.gemini_api_key = "test-key"
-    settings.gemini_model = "gemini-2.5-flash-lite"
-
-    ocr = OCREngine(settings)
-    ocr._rate_limiter = MagicMock()
-    ocr._rate_limiter.min_interval = 12.0
-    ocr._client = MagicMock()
-    ocr._client.models.generate_content.side_effect = genai_errors.ClientError(
-        404,
-        {
-            "error": {
-                "code": 404,
-                "message": "This model models/gemini-2.5-flash-lite is no longer available to new users.",
-                "status": "NOT_FOUND",
-            }
-        },
-    )
-
-    with pytest.raises(RuntimeError, match="GEMINI_MODEL"):
-        ocr._generate_with_retries({"model": settings.gemini_model})
-
-
-@pytest.mark.unit
-def test_is_retryable_api_error_for_503() -> None:
-    from google.genai import errors as genai_errors
-
-    exc = genai_errors.ServerError(
-        503,
-        {"error": {"message": "high demand", "status": "UNAVAILABLE"}},
-    )
-    assert _is_retryable_api_error(exc) is True
-
-
-@pytest.mark.unit
-def test_model_unavailable_message_mentions_setting() -> None:
-    from google.genai import errors as genai_errors
-
-    settings = Settings(gemini_model="gemini-2.5-flash-lite")
-    exc = genai_errors.ClientError(404, {"error": {"message": "no longer available"}})
-    message = _model_unavailable_message(settings, exc)
-    assert "gemini-2.5-flash-lite" in message
-    assert "GEMINI_MODEL" in message
-
-
-@pytest.mark.unit
 def test_gemini_generation_config_for_v3_models() -> None:
-    config = _gemini_generation_config("gemini-3.5-flash", json_response=True)
+    config = gemini_generate_config("gemini-3.5-flash", json_response=True)
     assert config is not None
     assert config.thinking_config is not None
     assert config.thinking_config.thinking_level is not None
@@ -334,14 +142,14 @@ def test_gemini_generation_config_for_v3_models() -> None:
 
 @pytest.mark.unit
 def test_gemini_generation_config_skips_pro_minimal() -> None:
-    config = _gemini_generation_config("gemini-3.1-pro-preview", json_response=True)
+    config = gemini_generate_config("gemini-3.1-pro-preview", json_response=True)
     assert config is not None
     assert config.thinking_config is None
 
 
 @pytest.mark.unit
 def test_gemini_generation_config_skips_older_models() -> None:
-    assert _gemini_generation_config("gemini-2.0-flash", json_response=False) is None
+    assert gemini_generate_config("gemini-2.0-flash", json_response=False) is None
 
 
 @pytest.mark.unit

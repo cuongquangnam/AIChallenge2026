@@ -23,7 +23,7 @@ def test_build_batch_frame_answer_prompt_lists_candidates() -> None:
 @pytest.mark.unit
 def test_answer_single_frames_batch_parses_response() -> None:
     settings = Settings(gemini_api_key="test-key")
-    with patch.object(GeminiQAModel, "__init__", lambda self, _settings: None):
+    with patch.object(GeminiQAModel, "__init__", lambda self, _settings, **kwargs: None):
         model = GeminiQAModel(settings)
         model._types = type(
             "Types",

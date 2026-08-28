@@ -6,7 +6,9 @@ import re
 
 from video_retrieval.config import Settings
 from video_retrieval.models import QueryPlan
+from video_retrieval.text.gemini_client import get_gemini_client
 from video_retrieval.text.gemini_logging import log_gemini_failure
+from video_retrieval.text.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -30,43 +32,33 @@ Query: {query}
 class QueryPlanner:
     """Turn a natural-language query into OCR / ASR / visual search strings."""
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        llm: LLMClient | None = None,
+    ):
         self.settings = settings
         self.backend = _planner_backend(settings)
-        self._client = None
-        if self.backend == "gemini":
-            self._init_gemini()
-
-    def _init_gemini(self) -> None:
-        if not self.settings.gemini_api_key:
+        self._llm = llm
+        if self.backend == "gemini" and self._llm is None:
+            self._llm = get_gemini_client(settings)
+        if self.backend == "gemini" and self._llm is None:
             logger.warning(
                 "Gemini query planner disabled: GEMINI_API_KEY is empty; using heuristic plans"
             )
             self.backend = "heuristic"
-            return
-        try:
-            from google import genai
-            from google.genai import types
-        except ImportError as exc:
-            logger.error(
-                "Gemini query planner disabled: google-genai import failed (%s); using heuristic plans",
-                exc,
+        elif self.backend == "gemini":
+            logger.info(
+                "Gemini query planner ready (model=%s)",
+                self.settings.gemini_model,
             )
-            self.backend = "heuristic"
-            return
-
-        self._client = genai.Client(api_key=self.settings.gemini_api_key)
-        self._types = types
-        logger.info(
-            "Gemini query planner ready (model=%s)",
-            self.settings.gemini_model,
-        )
 
     def plan(self, query: str) -> QueryPlan:
         query = query.strip()
         if not query:
             return QueryPlan()
-        if self.backend != "gemini" or self._client is None:
+        if self.backend != "gemini" or self._llm is None:
             return heuristic_plan(query)
 
         try:
@@ -82,18 +74,12 @@ class QueryPlanner:
             return heuristic_plan(query)
 
     def _plan_gemini(self, query: str) -> QueryPlan:
-        from video_retrieval.text.gemini_config import gemini_generate_config
-
-        kwargs: dict = {
-            "model": self.settings.gemini_model,
-            "contents": _PLAN_PROMPT.format(query=query),
-        }
-        config = gemini_generate_config(self.settings.gemini_model, json_response=True)
-        if config is not None:
-            kwargs["config"] = config
-
-        response = self._client.models.generate_content(**kwargs)
-        raw = (response.text or "").strip()
+        assert self._llm is not None
+        raw = self._llm.generate_text(
+            _PLAN_PROMPT.format(query=query),
+            json_response=True,
+            component="query planner",
+        )
         plan = parse_plan(raw, fallback_query=query)
         if not (plan.ocr or plan.asr or plan.visual):
             logger.warning(
