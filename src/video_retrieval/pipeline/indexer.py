@@ -116,7 +116,7 @@ class VideoIndexer:
 
         n_text = 0
         if text_docs:
-            n_text = self.es.index_documents(text_docs)
+            n_text = self.es.index_documents(text_docs, refresh=True)
 
         self._write_manifest(
             video_id=video_id,

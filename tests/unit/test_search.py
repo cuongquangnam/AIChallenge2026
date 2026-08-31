@@ -154,3 +154,46 @@ def test_search_planned_uses_channel_queries(settings, qdrant_store: QdrantStore
 def test_heuristic_plan_copies_query() -> None:
     plan = heuristic_plan("nhạc rock")
     assert plan.ocr == plan.asr == plan.visual == "nhạc rock"
+
+
+@pytest.mark.unit
+def test_encode_text_cached_reuses_vector(settings, qdrant_store: QdrantStore) -> None:
+    settings.query_planner = "heuristic"
+    service = SearchService(settings, qdrant=qdrant_store)
+
+    class _CountingEncoder:
+        calls = 0
+
+        def encode_text(self, text: str) -> list[float]:
+            _CountingEncoder.calls += 1
+            return [0.1] * settings.siglip_dim
+
+    encoder = _CountingEncoder()
+    service.visual = encoder  # type: ignore[assignment]
+
+    first = service._encode_text_cached("same query")
+    second = service._encode_text_cached("same query")
+    assert first == second
+    assert encoder.calls == 1
+
+    service._encode_text_cached("different query")
+    assert encoder.calls == 2
+
+
+@pytest.mark.unit
+def test_retrieve_channels_runs_all_active_channels(settings, qdrant_store: QdrantStore) -> None:
+    settings.query_planner = "heuristic"
+    fake_es = FakeElasticsearchStore()
+    service = SearchService(settings, qdrant=qdrant_store, es=fake_es)  # type: ignore[arg-type]
+
+    ocr_hits, asr_hits, visual_hits = service._retrieve_channels(
+        ocr_query="ocr text",
+        asr_query="asr text",
+        visual_query="visual text",
+        channel_limit=5,
+        vector_name="siglip",
+    )
+    assert ocr_hits == []
+    assert asr_hits == []
+    assert visual_hits == []
+

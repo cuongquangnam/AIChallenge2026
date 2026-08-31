@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ from video_retrieval.storage.qdrant_store import QdrantStore
 
 _CHANNEL_LIMIT_FACTOR = 5
 _ASR_TIME_PAD_SEC = 1.5
+_TEXT_VECTOR_CACHE_SIZE = 256
 
 
 class SearchService:
@@ -31,6 +34,7 @@ class SearchService:
         self.qdrant = qdrant or QdrantStore(self.settings)
         self.es = es or ElasticsearchStore(self.settings)
         self.planner = planner or QueryPlanner(self.settings)
+        self._text_vector_cache: OrderedDict[str, list[float]] = OrderedDict()
 
     def search_text(self, query: str, *, limit: int = 10) -> SearchResponse:
         return self.search_mixed(query, limit=limit)
@@ -70,7 +74,7 @@ class SearchService:
         plan = self.planner.plan(query)
         text = plan.visual or query
         hits = self.qdrant.search(
-            self.visual.encode_text(text),
+            self._encode_text_cached(text),
             vector_name=vector_name,
             limit=limit,
         )
@@ -115,22 +119,14 @@ class SearchService:
         plan = self.planner.plan(query)
         channel_limit = max(limit * _CHANNEL_LIMIT_FACTOR, limit)
 
-        ocr_hits: list[SearchHit] = []
-        asr_hits: list[SearchHit] = []
-        visual_hits: list[SearchHit] = []
-        if plan.ocr:
-            log_query_stage("search", "retrieve_ocr")
-            ocr_hits = self.es.search(plan.ocr, limit=channel_limit, source="ocr")
-        if plan.asr:
-            log_query_stage("search", "retrieve_asr")
-            asr_hits = self.es.search(plan.asr, limit=channel_limit, source="asr")
-        if plan.visual:
-            log_query_stage("search", "retrieve_visual")
-            visual_hits = self.qdrant.search(
-                self.visual.encode_text(plan.visual),
-                vector_name=vector_name,
-                limit=channel_limit,
-            )
+        log_query_stage("search", "retrieve_channels", parallel=True)
+        ocr_hits, asr_hits, visual_hits = self._retrieve_channels(
+            ocr_query=plan.ocr,
+            asr_query=plan.asr,
+            visual_query=plan.visual,
+            channel_limit=channel_limit,
+            vector_name=vector_name,
+        )
 
         log_query_stage("search", "fuse_hits", limit=limit)
         fused = fuse_frame_scores(
@@ -157,26 +153,93 @@ class SearchService:
             raise TypeError("event must be EventSpec")
 
         channel_limit = max(limit * _CHANNEL_LIMIT_FACTOR, limit)
-        ocr_hits: list[SearchHit] = []
-        asr_hits: list[SearchHit] = []
-        visual_hits: list[SearchHit] = []
-        if event.ocr:
-            ocr_hits = self.es.search(event.ocr, limit=channel_limit, source="ocr")
-        if event.asr:
-            asr_hits = self.es.search(event.asr, limit=channel_limit, source="asr")
         visual_text = (event.visual or event.description or "").strip()
-        if visual_text:
-            visual_hits = self.qdrant.search(
-                self.visual.encode_text(visual_text),
-                vector_name=vector_name,
-                limit=channel_limit,
-            )
+        ocr_hits, asr_hits, visual_hits = self._retrieve_channels(
+            ocr_query=event.ocr,
+            asr_query=event.asr,
+            visual_query=visual_text or None,
+            channel_limit=channel_limit,
+            vector_name=vector_name,
+        )
         weights = _event_weights(event)
         return fuse_frame_scores(
             ocr_hits=ocr_hits,
             asr_hits=asr_hits,
             visual_hits=visual_hits,
             weights=weights,
+            limit=limit,
+        )
+
+    def _encode_text_cached(self, text: str) -> list[float]:
+        cached = self._text_vector_cache.get(text)
+        if cached is not None:
+            self._text_vector_cache.move_to_end(text)
+            return cached
+        vector = self.visual.encode_text(text)
+        self._text_vector_cache[text] = vector
+        if len(self._text_vector_cache) > _TEXT_VECTOR_CACHE_SIZE:
+            self._text_vector_cache.popitem(last=False)
+        return vector
+
+    def _retrieve_channels(
+        self,
+        *,
+        ocr_query: str | None,
+        asr_query: str | None,
+        visual_query: str | None,
+        channel_limit: int,
+        vector_name: str,
+    ) -> tuple[list[SearchHit], list[SearchHit], list[SearchHit]]:
+        """Run OCR, ASR, and visual retrieval concurrently."""
+        tasks: dict[str, Any] = {}
+        max_workers = min(3, sum(1 for query in (ocr_query, asr_query, visual_query) if query))
+        if max_workers <= 1:
+            return (
+                self.es.search(ocr_query, limit=channel_limit, source="ocr") if ocr_query else [],
+                self.es.search(asr_query, limit=channel_limit, source="asr") if asr_query else [],
+                (
+                    self.qdrant.search(
+                        self._encode_text_cached(visual_query),
+                        vector_name=vector_name,
+                        limit=channel_limit,
+                    )
+                    if visual_query
+                    else []
+                ),
+            )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            if ocr_query:
+                tasks["ocr"] = executor.submit(
+                    self.es.search, ocr_query, limit=channel_limit, source="ocr"
+                )
+            if asr_query:
+                tasks["asr"] = executor.submit(
+                    self.es.search, asr_query, limit=channel_limit, source="asr"
+                )
+            if visual_query:
+                tasks["visual"] = executor.submit(
+                    self._search_visual_channel,
+                    visual_query,
+                    vector_name=vector_name,
+                    limit=channel_limit,
+                )
+
+            results: dict[str, list[SearchHit]] = {"ocr": [], "asr": [], "visual": []}
+            for channel, future in tasks.items():
+                results[channel] = future.result()
+            return results["ocr"], results["asr"], results["visual"]
+
+    def _search_visual_channel(
+        self,
+        text: str,
+        *,
+        vector_name: str,
+        limit: int,
+    ) -> list[SearchHit]:
+        return self.qdrant.search(
+            self._encode_text_cached(text),
+            vector_name=vector_name,
             limit=limit,
         )
 
@@ -200,8 +263,10 @@ def fuse_frame_scores(
         _merge_bucket(buckets, hit, visual=score)
     for hit, score in zip(ocr_hits, ocr_norm, strict=True):
         _merge_bucket(buckets, hit, ocr=score)
+
+    buckets_by_video = _index_buckets_by_video(buckets)
     for hit, score in zip(asr_hits, asr_norm, strict=True):
-        matched = _apply_asr_to_frames(buckets, hit, score)
+        matched = _apply_asr_to_frames(buckets_by_video.get(hit.video_id, ()), hit, score)
         if not matched:
             _merge_bucket(buckets, hit, asr=score)
 
@@ -304,18 +369,25 @@ def _merge_bucket(
         bucket["hit"] = current.model_copy(update={"text": hit.text})
 
 
-def _apply_asr_to_frames(
+def _index_buckets_by_video(
     buckets: dict[tuple, dict[str, Any]],
+) -> dict[str, tuple[dict[str, Any], ...]]:
+    by_video: dict[str, list[dict[str, Any]]] = {}
+    for bucket in buckets.values():
+        by_video.setdefault(bucket["hit"].video_id, []).append(bucket)
+    return {video_id: tuple(items) for video_id, items in by_video.items()}
+
+
+def _apply_asr_to_frames(
+    video_buckets: tuple[dict[str, Any], ...],
     asr_hit: SearchHit,
     score: float,
 ) -> bool:
     start = asr_hit.timestamp_sec
     end = _hit_end_sec(asr_hit)
     matched = False
-    for bucket in buckets.values():
+    for bucket in video_buckets:
         frame: SearchHit = bucket["hit"]
-        if frame.video_id != asr_hit.video_id:
-            continue
         if asr_hit.shot_index is not None and frame.shot_index == asr_hit.shot_index:
             bucket["asr"] = max(bucket["asr"], score)
             if not frame.text and asr_hit.text:

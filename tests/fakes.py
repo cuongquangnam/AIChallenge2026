@@ -12,7 +12,7 @@ class FakeElasticsearchStore:
     def ensure_index(self) -> None:
         return None
 
-    def index_documents(self, documents: list[TextDocument]) -> int:
+    def index_documents(self, documents: list[TextDocument], *, refresh: bool = False) -> int:
         for doc in documents:
             self.docs[doc.doc_id] = doc
         return len(documents)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.events.align import score_videos, top_monotonic_paths
 from video_retrieval.events.rerank import CrossEncoderReranker, PooledCrossEncoderReranker
@@ -68,6 +70,27 @@ class EventChainSearcher:
         *,
         limit: int,
     ) -> dict[str, list[SearchHit]]:
+        if len(plan.events) <= 1:
+            return self._retrieve_events_sequential(plan, limit=limit)
+
+        max_workers = min(len(plan.events), self.settings.search_parallel_workers)
+        by_event: dict[str, list[SearchHit]] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._retrieve_single_event, plan, event, limit=limit): event
+                for event in plan.events
+            }
+            for future in futures:
+                event = futures[future]
+                by_event[event.event_id] = future.result()
+        return by_event
+
+    def _retrieve_events_sequential(
+        self,
+        plan: EventChainPlan,
+        *,
+        limit: int,
+    ) -> dict[str, list[SearchHit]]:
         by_event: dict[str, list[SearchHit]] = {}
         for index, event in enumerate(plan.events, start=1):
             log_query_stage(
@@ -76,22 +99,32 @@ class EventChainSearcher:
                 event_id=event.event_id,
                 index=f"{index}/{len(plan.events)}",
             )
-            hits = self.search_service.search_event_spec(event, limit=limit)
-            log_query_stage(
-                plan.task,
-                "retrieve_event_done",
-                event_id=event.event_id,
-                hits=len(hits),
-            )
-            if not hits:
-                query = _event_search_query(event, context=plan.context)
-                try:
-                    response = self.search_service.search_mixed(query, limit=min(limit, 20))
-                    hits = list(response.hits)
-                except Exception:
-                    hits = []
-            by_event[event.event_id] = hits
+            by_event[event.event_id] = self._retrieve_single_event(plan, event, limit=limit)
         return by_event
+
+    def _retrieve_single_event(
+        self,
+        plan: EventChainPlan,
+        event: EventSpec,
+        *,
+        limit: int,
+    ) -> list[SearchHit]:
+        log_query_stage(plan.task, "retrieve_event", event_id=event.event_id)
+        hits = self.search_service.search_event_spec(event, limit=limit)
+        log_query_stage(
+            plan.task,
+            "retrieve_event_done",
+            event_id=event.event_id,
+            hits=len(hits),
+        )
+        if not hits:
+            query = _event_search_query(event, context=plan.context)
+            try:
+                response = self.search_service.search_mixed(query, limit=min(limit, 20))
+                hits = list(response.hits)
+            except Exception:
+                hits = []
+        return hits
 
     def _retrieve_event_in_video(
         self,
@@ -102,31 +135,43 @@ class EventChainSearcher:
     ) -> list[SearchHit]:
         query = _event_search_query(event, context="")
         hits: list[SearchHit] = []
-        try:
-            vector = self.search_service.visual.encode_text(query)
-            hits.extend(
-                self.search_service.qdrant.search(
-                    vector,
-                    vector_name="siglip",
+        tasks = {}
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            tasks["visual"] = executor.submit(
+                self._search_visual_in_video,
+                query,
+                video_id=video_id,
+                limit=limit,
+            )
+            if event.ocr:
+                tasks["ocr"] = executor.submit(
+                    self.search_service.es.search,
+                    event.ocr,
                     limit=limit,
+                    source="ocr",
                     video_id=video_id,
                 )
-            )
-        except Exception:
-            pass
-        if event.ocr:
-            try:
-                hits.extend(
-                    self.search_service.es.search(
-                        event.ocr,
-                        limit=limit,
-                        source="ocr",
-                        video_id=video_id,
-                    )
-                )
-            except Exception:
-                pass
+            for future in tasks.values():
+                try:
+                    hits.extend(future.result())
+                except Exception:
+                    pass
         return hits
+
+    def _search_visual_in_video(
+        self,
+        query: str,
+        *,
+        video_id: str,
+        limit: int,
+    ) -> list[SearchHit]:
+        vector = self.search_service._encode_text_cached(query)
+        return self.search_service.qdrant.search(
+            vector,
+            vector_name="siglip",
+            limit=limit,
+            video_id=video_id,
+        )
 
     def _align_chains(
         self,
