@@ -34,7 +34,7 @@ class ElasticsearchStore:
             },
         )
 
-    def index_documents(self, documents: list[TextDocument]) -> int:
+    def index_documents(self, documents: list[TextDocument], *, refresh: bool = False) -> int:
         if not documents:
             return 0
         self.ensure_index()
@@ -54,7 +54,7 @@ class ElasticsearchStore:
                     "keyframe_path": doc.metadata.get("keyframe_path"),
                 }
             )
-        self.client.bulk(operations=operations, refresh=True)
+        self.client.bulk(operations=operations, refresh=refresh)
         return len(documents)
 
     def search(

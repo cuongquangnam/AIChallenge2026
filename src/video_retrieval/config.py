@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     trake_top_videos: int = 15
     trake_top_chains: int = 10
     trake_candidates_per_event: int = 50
+    search_parallel_workers: int = 4
 
     chain_rerank_enabled: bool = True
     chain_rerank_backend: str = "auto"  # auto | mock | real
