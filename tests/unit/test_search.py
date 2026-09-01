@@ -69,6 +69,7 @@ def test_fuse_frame_scores_combines_channels_on_the_same_frame() -> None:
 def test_parse_plan_reads_channel_queries() -> None:
     raw = """
     {"ocr": "VTV24", "asr": "xin chao", "visual": "news anchor on television",
+     "required_objects": [{"label": "person", "min_count": 1}],
      "weights": {"ocr": 0.4, "asr": 0.2, "visual": 0.4}}
     """
     plan = parse_plan(raw, fallback_query="hello")
@@ -76,6 +77,7 @@ def test_parse_plan_reads_channel_queries() -> None:
     assert plan.asr == "xin chao"
     assert plan.visual == "news anchor on television"
     assert plan.weights["ocr"] == 0.4
+    assert plan.required_objects[0].label == "person"
 
 
 @pytest.mark.unit

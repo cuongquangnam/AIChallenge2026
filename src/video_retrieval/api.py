@@ -54,8 +54,8 @@ class IndexRequest(BaseModel):
     path: str
     video_id: str | None = None
     data_dir: str | None = None
-    stages: list[Literal["visual", "ocr", "asr"]] | None = None
-    only: Literal["visual", "ocr", "asr"] | None = None
+    stages: list[Literal["visual", "ocr", "asr", "objects"]] | None = None
+    only: Literal["visual", "ocr", "asr", "objects"] | None = None
     reuse_extract: bool = True
 
 
@@ -160,7 +160,7 @@ async def index_upload(
     file: UploadFile = File(...),
     video_id: str | None = None,
     data_dir: str | None = None,
-    only: Literal["visual", "ocr", "asr"] | None = None,
+    only: Literal["visual", "ocr", "asr", "objects"] | None = None,
     stages: str | None = None,
     reuse_extract: bool = True,
 ):

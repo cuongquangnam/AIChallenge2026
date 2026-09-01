@@ -8,7 +8,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
 from video_retrieval.config import Settings
-from video_retrieval.models import SearchHit, VisualEmbedding
+from video_retrieval.models import FrameObjectDetections, SearchHit, VisualEmbedding
 
 
 class QdrantStore:
@@ -41,13 +41,34 @@ class QdrantStore:
             },
         )
 
-    def upsert_embeddings(self, embeddings: list[VisualEmbedding]) -> int:
+    def upsert_embeddings(
+        self,
+        embeddings: list[VisualEmbedding],
+        *,
+        object_detections: list[FrameObjectDetections] | None = None,
+    ) -> int:
         if not embeddings:
             return 0
         self.ensure_collection()
-        points = [self._to_point(emb) for emb in embeddings]
+        object_map = _object_payload_map(object_detections or [])
+        points = [self._to_point(emb, object_map=object_map) for emb in embeddings]
         self.client.upsert(collection_name=self.collection, points=points)
         return len(points)
+
+    def set_object_payload(self, frames: list[FrameObjectDetections]) -> int:
+        """Attach object metadata to already indexed visual points."""
+        if not frames:
+            return 0
+        self.ensure_collection()
+        for frame in frames:
+            keyframe = frame.keyframe
+            point_id = _point_id(keyframe)
+            self.client.set_payload(
+                collection_name=self.collection,
+                points=[point_id],
+                payload=_object_payload(frame),
+            )
+        return len(frames)
 
     def search(
         self,
@@ -90,9 +111,15 @@ class QdrantStore:
             )
         return hits
 
-    def _to_point(self, emb: VisualEmbedding) -> qm.PointStruct:
+    def _to_point(
+        self,
+        emb: VisualEmbedding,
+        *,
+        object_map: dict[tuple[str, int, str, int], dict[str, Any]] | None = None,
+    ) -> qm.PointStruct:
         kf = emb.keyframe
-        point_id = _stable_uuid(f"{kf.video_id}:{kf.shot_index}:{kf.role.value}:{kf.frame_index}")
+        point_id = _point_id(kf)
+        object_payload = (object_map or {}).get(_keyframe_key(kf), {})
         return qm.PointStruct(
             id=point_id,
             vector={"siglip": emb.siglip, "beit3": emb.beit3},
@@ -103,8 +130,38 @@ class QdrantStore:
                 "frame_index": kf.frame_index,
                 "timestamp_sec": kf.timestamp_sec,
                 "keyframe_path": str(kf.path),
+                **object_payload,
             },
         )
+
+
+def _keyframe_key(keyframe) -> tuple[str, int, str, int]:
+    return (
+        keyframe.video_id,
+        keyframe.shot_index,
+        keyframe.role.value,
+        keyframe.frame_index,
+    )
+
+
+def _point_id(keyframe) -> str:
+    video_id, shot_index, role, frame_index = _keyframe_key(keyframe)
+    return _stable_uuid(f"{video_id}:{shot_index}:{role}:{frame_index}")
+
+
+def _object_payload(frame: FrameObjectDetections) -> dict[str, Any]:
+    counts = frame.counts
+    return {
+        "objects_indexed": True,
+        "objects": sorted(counts),
+        "object_counts": counts,
+    }
+
+
+def _object_payload_map(
+    frames: list[FrameObjectDetections],
+) -> dict[tuple[str, int, str, int], dict[str, Any]]:
+    return {_keyframe_key(frame.keyframe): _object_payload(frame) for frame in frames}
 
 
 def _stable_uuid(value: str) -> str:

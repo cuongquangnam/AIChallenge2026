@@ -44,6 +44,28 @@ def test_parse_event_plan_keeps_model_gaps() -> None:
 
 
 @pytest.mark.unit
+def test_parse_event_plan_keeps_only_valid_coco_object_requirements() -> None:
+    raw = """
+    {
+      "events": [{
+        "event_id": "E1",
+        "visual": "two people beside a car",
+        "required_objects": [
+          {"label": "person", "min_count": 2},
+          {"label": "car", "min_count": 1},
+          {"label": "dragon", "min_count": 1}
+        ]
+      }]
+    }
+    """
+    plan = parse_event_plan(raw, fallback_query="two people beside a car", task="kis")
+    assert [(item.label, item.min_count) for item in plan.events[0].required_objects] == [
+        ("person", 2),
+        ("car", 1),
+    ]
+
+
+@pytest.mark.unit
 def test_heuristic_gap_uses_vietnamese_then_cue() -> None:
     query = "Cảnh A. Sau đó cảnh B."
     plan = heuristic_event_plan(query, task="kis")

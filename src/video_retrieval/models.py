@@ -45,6 +45,29 @@ class VisualEmbedding(BaseModel):
     beit3: list[float]
 
 
+class ObjectDetection(BaseModel):
+    label: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    bbox_xyxy: tuple[float, float, float, float]
+
+
+class FrameObjectDetections(BaseModel):
+    keyframe: KeyFrame
+    detections: list[ObjectDetection] = Field(default_factory=list)
+
+    @property
+    def counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for detection in self.detections:
+            counts[detection.label] = counts.get(detection.label, 0) + 1
+        return counts
+
+
+class ObjectRequirement(BaseModel):
+    label: str
+    min_count: int = Field(default=1, ge=1)
+
+
 class TextDocument(BaseModel):
     doc_id: str
     video_id: str
@@ -65,6 +88,7 @@ class IndexResult(BaseModel):
     num_keyframes: int
     num_visual_points: int
     num_text_docs: int
+    num_object_detections: int = 0
     audio_path: Path | None = None
     stages: list[str] = Field(default_factory=list)
 
@@ -75,6 +99,7 @@ class QueryPlan(BaseModel):
     ocr: str = ""
     asr: str = ""
     visual: str = ""
+    required_objects: list[ObjectRequirement] = Field(default_factory=list)
     weights: dict[str, float] = Field(
         default_factory=lambda: {"ocr": 1.0, "asr": 1.0, "visual": 1.0}
     )
@@ -136,6 +161,7 @@ class EventSpec(BaseModel):
     ocr: str = ""
     asr: str = ""
     visual: str = ""
+    required_objects: list[ObjectRequirement] = Field(default_factory=list)
     is_question_target: bool = False
     # Seconds from the previous event in a typical clip. E1 is always null.
     gap_from_prev_sec: float | None = None

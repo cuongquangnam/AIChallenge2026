@@ -41,12 +41,15 @@ def index_cmd(
     only: Optional[str] = typer.Option(
         None,
         "--only",
-        help="Run a single encoding stage: visual | ocr | asr",
+        help="Run a single indexing stage: visual | ocr | asr | objects",
     ),
     stages: Optional[str] = typer.Option(
         None,
         "--stages",
-        help="Comma-separated stages to run, e.g. visual,ocr (default: visual,ocr,asr)",
+        help=(
+            "Comma-separated stages to run, e.g. visual,objects "
+            "(default: visual,ocr,asr,objects)"
+        ),
     ),
     reuse_extract: bool = typer.Option(
         True,
