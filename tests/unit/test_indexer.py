@@ -4,6 +4,7 @@ import json
 import pytest
 
 from video_retrieval.pipeline.indexer import VideoIndexer
+from video_retrieval.models import FrameObjectDetections, ObjectDetection
 from video_retrieval.storage.qdrant_store import QdrantStore
 from tests.fakes import FakeElasticsearchStore
 from tests.helpers import write_dummy_video
@@ -97,3 +98,41 @@ def test_index_video_ocr_only_then_asr(settings, tmp_path: Path) -> None:
     assert sources == {"ocr", "asr"}
     manifest = json.loads((settings.manifests_dir / "clip.json").read_text(encoding="utf-8"))
     assert {doc["source"] for doc in manifest["text_docs"]} == {"ocr", "asr"}
+
+
+@pytest.mark.unit
+def test_index_video_objects_writes_manifest_and_qdrant_payload(settings, tmp_path: Path) -> None:
+    class _FakeDetector:
+        def detect_keyframes(self, keyframes):
+            return [
+                FrameObjectDetections(
+                    keyframe=keyframe,
+                    detections=[
+                        ObjectDetection(
+                            label="person",
+                            confidence=0.9,
+                            bbox_xyxy=(1, 2, 10, 20),
+                        )
+                    ],
+                )
+                for keyframe in keyframes
+            ]
+
+    video = write_dummy_video(tmp_path / "objects.mp4")
+    qdrant = QdrantStore(settings)
+    indexer = VideoIndexer(
+        settings,
+        objects=_FakeDetector(),  # type: ignore[arg-type]
+        qdrant=qdrant,
+        es=FakeElasticsearchStore(),  # type: ignore[arg-type]
+    )
+
+    result = indexer.index_video(video, video_id="objects", stages=["visual", "objects"])
+
+    assert result.num_object_detections == result.num_keyframes
+    manifest = json.loads((settings.manifests_dir / "objects.json").read_text(encoding="utf-8"))
+    assert len(manifest["object_detections"]) == result.num_keyframes
+    assert manifest["object_detections"][0]["detections"][0]["label"] == "person"
+    query = indexer.visual.encode_text("person")
+    hit = qdrant.search(query, limit=1)[0]
+    assert hit.payload["object_counts"] == {"person": 1}

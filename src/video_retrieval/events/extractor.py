@@ -7,6 +7,7 @@ import re
 from typing import Literal
 
 from video_retrieval.config import Settings, get_settings
+from video_retrieval.detection.coco import COCO_LABELS, parse_object_requirements
 from video_retrieval.models import EventChainPlan, EventSpec
 from video_retrieval.text.gemini_client import get_gemini_client
 from video_retrieval.text.gemini_logging import log_gemini_failure
@@ -32,6 +33,7 @@ Return JSON only, no markdown:
       "ocr": "on-screen text likely visible during this event",
       "asr": "spoken words likely heard during this event",
       "visual": "concise English visual description for image-text search",
+      "required_objects": [{{"label": "person", "min_count": 1}}],
       "is_question_target": false,
       "gap_from_prev_sec": null,
       "gap_min_sec": null,
@@ -44,6 +46,8 @@ Rules:
 - Use empty string when a channel is irrelevant.
 - Keep ocr/asr in the query language; put visual in concise English.
 - Do not invent events not described in the query.
+- required_objects contains only objects visibly required by the query. Use exact labels from
+  this COCO vocabulary: {coco_labels}. Use [] when no listed object is clearly required.
 - For E1, gap_from_prev_sec / gap_min_sec / gap_max_sec must be null.
 - For E2+, estimate wall-clock seconds between this event and the previous one
   in a typical 1–4 minute news/cooking/report clip:
@@ -123,6 +127,7 @@ class EventChainExtractor:
         prompt = _EXTRACT_PROMPT.format(
             task_rules=_TASK_RULES[task],
             query=query,
+            coco_labels=", ".join(COCO_LABELS),
         )
         raw = self._llm.generate_text(
             prompt,
@@ -299,6 +304,7 @@ def parse_event_plan(
                     ocr=str(item.get("ocr") or "").strip(),
                     asr=str(item.get("asr") or "").strip(),
                     visual=str(item.get("visual") or description).strip(),
+                    required_objects=parse_object_requirements(item.get("required_objects")),
                     is_question_target=bool(item.get("is_question_target")),
                     gap_from_prev_sec=_as_optional_float(item.get("gap_from_prev_sec")),
                     gap_min_sec=_as_optional_float(item.get("gap_min_sec")),

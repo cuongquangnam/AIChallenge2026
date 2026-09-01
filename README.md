@@ -88,6 +88,29 @@ By default indexing runs **visual + OCR + ASR**. Split them with:
 
 `QUERY_PLANNER=auto` uses Gemini when `GEMINI_API_KEY` is set, otherwise the full query is sent to the selected channel(s).
 
+## Object detection
+
+Install the ML dependencies and enable YOLO:
+
+```bash
+pip install -e ".[ml]"
+# .env
+OBJECT_BACKEND=yolo
+OBJECT_MODEL_ID=yolo11n.pt
+```
+
+Run object extraction together with visual indexing, or add it to existing visual points:
+
+```bash
+video-index index /path/to/video.mp4 --stages visual,objects
+video-index index /path/to/video.mp4 --only objects --reuse-extract
+```
+
+Detailed boxes and confidence scores are stored in the video manifest. Compact object labels and
+counts are stored in each Qdrant keyframe payload. Gemini emits COCO `required_objects` for the
+query; matching frames receive a soft rerank boost, while legacy points without object metadata
+remain eligible.
+
 ## Tests
 
 ```bash

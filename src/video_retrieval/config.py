@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     visual_backend: str = "mock"  # mock | real
     ocr_backend: str = "mock"  # mock | gemini
     asr_backend: str = "mock"  # mock | whisper
+    object_backend: str = "mock"  # mock | yolo
     shot_backend: str = "opencv"  # opencv | transnetv2
 
     gemini_api_key: str = ""
@@ -34,6 +35,13 @@ class Settings(BaseSettings):
     whisper_model: str = "base"
     siglip_model_id: str = "google/siglip-base-patch16-224"
     beit3_model_id: str = "microsoft/beit-base-patch16-224"
+    object_model_id: str = "yolo11n.pt"
+    object_confidence: float = 0.25
+    object_iou: float = 0.7
+    object_batch_size: int = 32
+    object_device: str = ""
+    object_filter_boost: float = 0.2
+    object_filter_penalty: float = 0.1
 
     # Q&A uses Gemini by default (same GEMINI_API_KEY as OCR / planner).
     qa_llm_backend: str = "gemini"  # gemini | none

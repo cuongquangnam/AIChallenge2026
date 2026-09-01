@@ -6,8 +6,9 @@ from typing import Any
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.encoders.pooled import PooledVisualEncoder
 from video_retrieval.encoders.visual import VisualEncoder
-from video_retrieval.models import QueryPlan, SearchHit, SearchResponse
+from video_retrieval.models import SearchHit, SearchResponse
 from video_retrieval.query_stages import log_query_stage
+from video_retrieval.search.object_filter import rerank_hits_by_objects
 from video_retrieval.search.planner import QueryPlanner
 from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
 from video_retrieval.storage.qdrant_store import QdrantStore
@@ -69,9 +70,17 @@ class SearchService:
     ) -> SearchResponse:
         plan = self.planner.plan(query)
         text = plan.visual or query
+        channel_limit = max(limit * _CHANNEL_LIMIT_FACTOR, limit)
         hits = self.qdrant.search(
             self.visual.encode_text(text),
             vector_name=vector_name,
+            limit=channel_limit,
+        )
+        hits = rerank_hits_by_objects(
+            hits,
+            plan.required_objects,
+            boost=self.settings.object_filter_boost,
+            penalty=self.settings.object_filter_penalty,
             limit=limit,
         )
         return SearchResponse(query=query, mode="visual", hits=hits, plan=plan)
@@ -138,6 +147,13 @@ class SearchService:
             asr_hits=asr_hits,
             visual_hits=visual_hits,
             weights=plan.weights,
+            limit=channel_limit,
+        )
+        fused = rerank_hits_by_objects(
+            fused,
+            plan.required_objects,
+            boost=self.settings.object_filter_boost,
+            penalty=self.settings.object_filter_penalty,
             limit=limit,
         )
         log_query_stage("search", "done", hits=len(fused))
@@ -172,11 +188,18 @@ class SearchService:
                 limit=channel_limit,
             )
         weights = _event_weights(event)
-        return fuse_frame_scores(
+        fused = fuse_frame_scores(
             ocr_hits=ocr_hits,
             asr_hits=asr_hits,
             visual_hits=visual_hits,
             weights=weights,
+            limit=channel_limit,
+        )
+        return rerank_hits_by_objects(
+            fused,
+            event.required_objects,
+            boost=self.settings.object_filter_boost,
+            penalty=self.settings.object_filter_penalty,
             limit=limit,
         )
 

@@ -12,6 +12,8 @@ data/
 *.mov
 *.avi
 *.mkv
+*.pt
+tmp/
 .DS_Store
 dist/
 build/

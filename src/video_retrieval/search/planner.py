@@ -5,6 +5,7 @@ import logging
 import re
 
 from video_retrieval.config import Settings
+from video_retrieval.detection.coco import COCO_LABELS, parse_object_requirements
 from video_retrieval.models import QueryPlan
 from video_retrieval.text.gemini_client import get_gemini_client
 from video_retrieval.text.gemini_logging import log_gemini_failure
@@ -19,12 +20,15 @@ Return JSON only, no markdown:
   "ocr": "words likely shown on screen (logos, captions, signs, names)",
   "asr": "words likely spoken in the audio",
   "visual": "English visual scene description for image-text embedding search",
+  "required_objects": [{{"label": "person", "min_count": 1}}],
   "weights": {{"ocr": 0.0-1.0, "asr": 0.0-1.0, "visual": 0.0-1.0}}
 }}
 Rules:
 - Use empty string if a channel is not relevant.
 - Keep ocr/asr in the query language; put visual in concise English.
 - Weights should sum to about 1; raise a channel if that is the user's main intent.
+- required_objects contains only visibly required objects, using exact labels from this COCO
+  vocabulary: {coco_labels}. Use [] if none applies.
 Query: {query}
 """
 
@@ -76,7 +80,7 @@ class QueryPlanner:
     def _plan_gemini(self, query: str) -> QueryPlan:
         assert self._llm is not None
         raw = self._llm.generate_text(
-            _PLAN_PROMPT.format(query=query),
+            _PLAN_PROMPT.format(query=query, coco_labels=", ".join(COCO_LABELS)),
             json_response=True,
             component="query planner",
         )
@@ -112,6 +116,7 @@ def parse_plan(raw: str, *, fallback_query: str) -> QueryPlan:
         ocr=str(payload.get("ocr") or "").strip(),
         asr=str(payload.get("asr") or "").strip(),
         visual=str(payload.get("visual") or "").strip(),
+        required_objects=parse_object_requirements(payload.get("required_objects")),
         weights=weights,
     )
     if not (plan.ocr or plan.asr or plan.visual):

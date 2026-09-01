@@ -5,16 +5,24 @@ import shutil
 from pathlib import Path
 
 from video_retrieval.config import Settings, get_settings
+from video_retrieval.detection.objects import ObjectDetector
 from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.extraction.audio import extract_audio
 from video_retrieval.extraction.keyframes import extract_keyframes
-from video_retrieval.models import AudioTrack, IndexResult, KeyFrame, Shot, TextDocument
+from video_retrieval.models import (
+    AudioTrack,
+    FrameObjectDetections,
+    IndexResult,
+    KeyFrame,
+    Shot,
+    TextDocument,
+)
 from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
 from video_retrieval.storage.qdrant_store import QdrantStore
 from video_retrieval.text.asr import ASREngine
 from video_retrieval.text.ocr import OCREngine
 
-INDEX_STAGES = ("visual", "ocr", "asr")
+INDEX_STAGES = ("visual", "ocr", "asr", "objects")
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
@@ -28,6 +36,7 @@ class VideoIndexer:
         visual: VisualEncoder | None = None,
         ocr: OCREngine | None = None,
         asr: ASREngine | None = None,
+        objects: ObjectDetector | None = None,
         qdrant: QdrantStore | None = None,
         es: ElasticsearchStore | None = None,
     ):
@@ -36,6 +45,7 @@ class VideoIndexer:
         self._visual = visual
         self._ocr = ocr
         self._asr = asr
+        self._objects = objects
         self._qdrant = qdrant
         self._es = es
 
@@ -62,6 +72,12 @@ class VideoIndexer:
         if self._qdrant is None:
             self._qdrant = QdrantStore(self.settings)
         return self._qdrant
+
+    @property
+    def objects(self) -> ObjectDetector:
+        if self._objects is None:
+            self._objects = ObjectDetector(self.settings)
+        return self._objects
 
     @property
     def es(self) -> ElasticsearchStore:
@@ -92,13 +108,23 @@ class VideoIndexer:
         )
         keyframes: list[KeyFrame] = [kf for shot in shots for kf in shot.keyframes]
 
+        existing_manifest = self._read_manifest(video_id)
+        object_detections = _load_object_detections(existing_manifest)
+        if "objects" in selected:
+            object_detections = self.objects.detect_keyframes(keyframes)
+        n_objects = sum(len(frame.detections) for frame in object_detections)
+
         n_visual = 0
         if "visual" in selected:
             embeddings = self.visual.encode_keyframes(keyframes)
-            n_visual = self.qdrant.upsert_embeddings(embeddings)
+            n_visual = self.qdrant.upsert_embeddings(
+                embeddings,
+                object_detections=object_detections,
+            )
+        elif "objects" in selected:
+            self.qdrant.set_object_payload(object_detections)
 
         text_docs: list[TextDocument] = []
-        existing_manifest = self._read_manifest(video_id)
         existing_text = existing_manifest.get("text_docs") if existing_manifest else []
         if not isinstance(existing_text, list):
             existing_text = []
@@ -125,6 +151,7 @@ class VideoIndexer:
             shots=shots,
             keyframes=keyframes,
             text_docs=existing_text,
+            object_detections=object_detections,
         )
         return IndexResult(
             video_id=video_id,
@@ -133,6 +160,7 @@ class VideoIndexer:
             num_keyframes=len(keyframes),
             num_visual_points=n_visual,
             num_text_docs=n_text,
+            num_object_detections=n_objects,
             audio_path=audio.path if audio else None,
             stages=sorted(selected),
         )
@@ -167,7 +195,7 @@ class VideoIndexer:
         selected: set[str],
         reuse_extract: bool,
     ) -> tuple[list[Shot], AudioTrack | None]:
-        need_shots = bool(selected & {"visual", "ocr", "asr"})
+        need_shots = bool(selected & {"visual", "ocr", "asr", "objects"})
         need_audio = "asr" in selected
         shots: list[Shot] = []
         audio: AudioTrack | None = None
@@ -228,6 +256,7 @@ class VideoIndexer:
         shots: list[Shot],
         keyframes: list[KeyFrame],
         text_docs: list,
+        object_detections: list[FrameObjectDetections],
     ) -> None:
         existing = self._read_manifest(video_id)
         serialized_docs = [
@@ -244,6 +273,9 @@ class VideoIndexer:
             "shots": [shot.model_dump(mode="json") for shot in shots]
             or existing.get("shots", []),
             "text_docs": serialized_docs,
+            "object_detections": [
+                frame.model_dump(mode="json") for frame in object_detections
+            ],
         }
         manifest_path = self.settings.manifests_dir / f"{video_id}.json"
         self.settings.manifests_dir.mkdir(parents=True, exist_ok=True)
@@ -260,7 +292,7 @@ def normalize_stages(stages: list[str] | set[str] | None) -> set[str]:
             f"Unknown index stage(s) {sorted(unknown)}; expected one of {list(INDEX_STAGES)}"
         )
     if not selected:
-        raise ValueError("At least one index stage is required: visual, ocr, asr")
+        raise ValueError("At least one index stage is required: visual, ocr, asr, objects")
     return selected
 
 
@@ -272,3 +304,16 @@ def _replace_text_source(existing: list, source: str, docs: list[TextDocument]) 
         and not (isinstance(item, TextDocument) and item.source == source)
     ]
     return kept + list(docs)
+
+
+def _load_object_detections(manifest: dict) -> list[FrameObjectDetections]:
+    raw = manifest.get("object_detections") or []
+    if not isinstance(raw, list):
+        return []
+    frames: list[FrameObjectDetections] = []
+    for item in raw:
+        try:
+            frames.append(FrameObjectDetections.model_validate(item))
+        except (TypeError, ValueError):
+            continue
+    return frames
