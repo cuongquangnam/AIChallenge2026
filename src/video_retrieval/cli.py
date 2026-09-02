@@ -13,6 +13,8 @@ from video_retrieval.search.service import SearchService
 from video_retrieval.search.trake import TrakeService
 
 app = typer.Typer(help="Index and search videos (keyframes + OCR/ASR).")
+colab_app = typer.Typer(help="Google Colab CLI remote search (search, KIS, QA, TRAKE).")
+app.add_typer(colab_app, name="colab")
 
 
 @app.callback()
@@ -55,7 +57,6 @@ def index_cmd(
     ),
 ) -> None:
     settings = get_settings(data_dir=data_dir)
-    indexer = VideoIndexer(settings)
     selected = _cli_stages(only, stages)
     if selected:
         try:
@@ -63,6 +64,7 @@ def index_cmd(
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
     kwargs = {"stages": selected, "reuse_extract": reuse_extract}
+    indexer = VideoIndexer(settings)
     if path.is_dir():
         results = indexer.index_directory(path, **kwargs)
         for result in results:
@@ -82,14 +84,30 @@ def _cli_stages(only: str | None, stages: str | None) -> list[str] | None:
     return None
 
 
+def _remote_gateway(settings):
+    from video_retrieval.remote.gateway import RemoteComputeGateway
+
+    return RemoteComputeGateway(settings)
+
+
 @app.command("search")
 def search_cmd(
     query: str = typer.Argument(...),
     mode: str = typer.Option("mixed", help="visual | asr | ocr | mixed"),
     limit: int = typer.Option(10),
     data_dir: Optional[Path] = _data_dir_option(),
+    remote: bool = typer.Option(
+        False,
+        "--remote",
+        help="Run search on Colab via google-colab-cli (requires cloud storage + REMOTE_COMPUTE=colab).",
+    ),
 ) -> None:
-    service = SearchService(get_settings(data_dir=data_dir))
+    settings = get_settings(data_dir=data_dir)
+    if remote or settings.uses_remote_compute:
+        result = _remote_gateway(settings).search(query, mode=mode, limit=limit)
+        print(result)
+        return
+    service = SearchService(settings)
     if mode == "ocr":
         response = service.search_ocr(query, limit=limit)
     elif mode == "asr":
@@ -181,11 +199,19 @@ def trake_cmd(
     query: str = typer.Argument(..., help="Full TRAKE query with E1, E2, … events"),
     top_chains: int = typer.Option(5, min=1, max=20),
     data_dir: Optional[Path] = _data_dir_option(),
+    remote: bool = typer.Option(
+        False,
+        "--remote",
+        help="Run TRAKE on Colab via google-colab-cli.",
+    ),
 ) -> None:
     """Parse TRAKE events and print aligned video/frame chains."""
-    result = TrakeService(get_settings(data_dir=data_dir)).run(
-        query, top_chains=top_chains
-    )
+    settings = get_settings(data_dir=data_dir)
+    if remote or settings.uses_remote_compute:
+        result = _remote_gateway(settings).trake(query, top_chains=top_chains)
+        print(result)
+        return
+    result = TrakeService(settings).run(query, top_chains=top_chains)
     print(result)
 
 
@@ -208,6 +234,12 @@ def serve_cmd(
     from video_retrieval.runtime import init_runtime
 
     init_runtime(settings, force=True)
+    if settings.uses_remote_compute:
+        storage = f"Drive:{settings.drive_data_path or settings.drive_local_path}"
+        print(
+            f"UI at http://{host or settings.api_host}:{port or settings.api_port} "
+            f"(search via Colab, data in {storage})"
+        )
     uvicorn.run(
         api_module.app,
         host=host or settings.api_host,
@@ -216,6 +248,96 @@ def serve_cmd(
         log_level="info",
         log_config=uvicorn_log_config(),
     )
+
+
+@colab_app.command("session")
+def colab_session_cmd(data_dir: Optional[Path] = _data_dir_option()) -> None:
+    """Verify Colab session is reachable (manual setup: scripts/colab/MANUAL_SETUP.md)."""
+    settings = get_settings(data_dir=data_dir)
+    gateway = _remote_gateway(settings)
+    gateway.ensure_session()
+    print(f"Colab session reachable: {settings.colab_session}")
+    if settings.colab_auto_manage:
+        print(f"Data at {settings.colab_remote_data_dir} (auto-managed)")
+    else:
+        print("Manual mode: ensure you ran scripts/colab/laptop_bootstrap.sh on Colab first.")
+
+
+@colab_app.command("pull")
+def colab_pull_cmd(
+    data_dir: Optional[Path] = _data_dir_option(),
+    keyframes: bool = typer.Option(
+        True,
+        "--keyframes/--no-keyframes",
+        help="Also pull keyframes/ for local UI display.",
+    ),
+) -> None:
+    """Pull indexed data from Google Drive to the laptop DATA_DIR."""
+    settings = get_settings(data_dir=data_dir)
+    from video_retrieval.storage.data_sync import create_data_sync
+    from video_retrieval.storage.sync_paths import SEARCH_PULL_PATHS
+
+    paths = list(SEARCH_PULL_PATHS)
+    if keyframes:
+        paths.append("keyframes")
+    sync = create_data_sync(settings, mount_drive=False)
+    count = sync.pull(paths=paths)
+    source = settings.drive_local_path or settings.drive_data_path
+    print(f"Pulled {count} file(s) from Drive:{source}")
+
+
+@colab_app.command("search")
+def colab_search_cmd(
+    query: str = typer.Argument(...),
+    mode: str = typer.Option("mixed", help="visual | asr | ocr | mixed"),
+    limit: int = typer.Option(10),
+    data_dir: Optional[Path] = _data_dir_option(),
+) -> None:
+    """Run a search on Colab and sync keyframe thumbnails to the laptop."""
+    settings = get_settings(data_dir=data_dir)
+    result = _remote_gateway(settings).search(query, mode=mode, limit=limit)
+    print(result)
+
+
+@colab_app.command("kis")
+def colab_kis_cmd(
+    query: str = typer.Argument(...),
+    limit: int = typer.Option(100, min=1, max=100),
+    data_dir: Optional[Path] = _data_dir_option(),
+) -> None:
+    """Run KIS event-chain search on Colab."""
+    settings = get_settings(data_dir=data_dir)
+    result = _remote_gateway(settings).kis(query, limit=limit)
+    print(result)
+
+
+@colab_app.command("qa")
+def colab_qa_cmd(
+    question: str = typer.Argument(...),
+    limit: int = typer.Option(24, min=1, max=100),
+    frame_radius: Optional[int] = typer.Option(None, min=0, max=30),
+    data_dir: Optional[Path] = _data_dir_option(),
+) -> None:
+    """Run QA (event chains + VLM answer) on Colab."""
+    settings = get_settings(data_dir=data_dir)
+    result = _remote_gateway(settings).qa(
+        question,
+        limit=limit,
+        frame_radius=frame_radius,
+    )
+    print(result)
+
+
+@colab_app.command("trake")
+def colab_trake_cmd(
+    query: str = typer.Argument(...),
+    top_chains: int = typer.Option(5, min=1, max=20),
+    data_dir: Optional[Path] = _data_dir_option(),
+) -> None:
+    """Run TRAKE temporal chain search on Colab."""
+    settings = get_settings(data_dir=data_dir)
+    result = _remote_gateway(settings).trake(query, top_chains=top_chains)
+    print(result)
 
 
 if __name__ == "__main__":

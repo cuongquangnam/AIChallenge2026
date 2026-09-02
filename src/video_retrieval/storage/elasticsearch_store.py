@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
 from typing import Any
 
 from elasticsearch import Elasticsearch, NotFoundError
 
 from video_retrieval.config import Settings
 from video_retrieval.models import SearchHit, TextDocument
+
+logger = logging.getLogger(__name__)
 
 
 class ElasticsearchStore:
@@ -56,6 +61,43 @@ class ElasticsearchStore:
             )
         self.client.bulk(operations=operations, refresh=True)
         return len(documents)
+
+    def bulk_import_ndjson(self, path: Path) -> int:
+        """Import an Elasticsearch bulk-export ndjson file into this store's index."""
+        self.ensure_index()
+        operations: list[dict[str, Any]] = []
+        imported = 0
+        with path.open(encoding="utf-8") as handle:
+            lines = [line.strip() for line in handle if line.strip()]
+        index = 0
+        while index < len(lines):
+            meta = json.loads(lines[index])
+            action = meta.get("index") or meta.get("create")
+            if not action:
+                index += 1
+                continue
+            index += 1
+            if index >= len(lines):
+                break
+            source = json.loads(lines[index])
+            doc_id = action.get("_id")
+            operations.append(
+                {"index": {"_index": self.index, **({"_id": doc_id} if doc_id else {})}}
+            )
+            operations.append(source)
+            imported += 1
+            index += 1
+        if operations:
+            self.client.bulk(operations=operations, refresh=True)
+        logger.info("Imported %s text document(s) from %s", imported, path.name)
+        return imported
+
+    def import_from_manifests(self, manifests_dir: Path) -> int:
+        """Index OCR/ASR documents from per-video manifest JSON files."""
+        from video_retrieval.storage.memory_text_store import MemoryTextStore
+
+        loader = MemoryTextStore(manifests_dir=manifests_dir)
+        return self.index_documents(list(loader.docs.values()))
 
     def search(
         self,

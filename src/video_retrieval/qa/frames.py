@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 from pathlib import Path
 
@@ -8,6 +7,7 @@ import cv2
 
 from video_retrieval.config import Settings
 from video_retrieval.models import QAFrame, QAFrameGroup
+from video_retrieval.storage.qa_video_sync import ensure_qa_videos_from_drive, local_video_path
 from video_retrieval.qa.retrieval import QACandidate
 
 
@@ -24,20 +24,15 @@ class VideoLocator:
         self.settings = settings
 
     def find(self, video_id: str) -> Path:
-        manifest_path = self.settings.data_dir / "manifests" / f"{video_id}.json"
-        if manifest_path.exists():
-            try:
-                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-                video_path = Path(payload["video_path"])
-                if video_path.exists():
-                    return video_path
-            except (KeyError, TypeError, json.JSONDecodeError):
-                pass
+        path = local_video_path(self.settings, video_id)
+        if path is not None:
+            return path
 
-        if self.settings.videos_dir.exists():
-            for path in sorted(self.settings.videos_dir.iterdir()):
-                if path.is_file() and path.stem == video_id:
-                    return path
+        ensure_qa_videos_from_drive(self.settings, {video_id})
+        path = local_video_path(self.settings, video_id)
+        if path is not None:
+            return path
+
         raise VideoNotFoundForQAError(f"Indexed video file was not found for {video_id}")
 
 

@@ -9,8 +9,7 @@ from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.models import QueryPlan, SearchHit, SearchResponse
 from video_retrieval.query_stages import log_query_stage
 from video_retrieval.search.planner import QueryPlanner
-from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
-from video_retrieval.storage.qdrant_store import QdrantStore
+from video_retrieval.storage.factory import create_qdrant_store, create_text_store
 
 _CHANNEL_LIMIT_FACTOR = 5
 _ASR_TIME_PAD_SEC = 1.5
@@ -22,14 +21,14 @@ class SearchService:
         settings: Settings | None = None,
         *,
         visual: VisualEncoder | PooledVisualEncoder | None = None,
-        qdrant: QdrantStore | None = None,
-        es: ElasticsearchStore | None = None,
+        qdrant=None,
+        es=None,
         planner: QueryPlanner | None = None,
     ):
         self.settings = settings or get_settings()
         self.visual = visual or VisualEncoder(self.settings, load_beit=False)
-        self.qdrant = qdrant or QdrantStore(self.settings)
-        self.es = es or ElasticsearchStore(self.settings)
+        self.qdrant = qdrant or create_qdrant_store(self.settings)
+        self.es = es or create_text_store(self.settings)
         self.planner = planner or QueryPlanner(self.settings)
 
     def search_text(self, query: str, *, limit: int = 10) -> SearchResponse:

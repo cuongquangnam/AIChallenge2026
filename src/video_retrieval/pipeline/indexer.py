@@ -9,8 +9,7 @@ from video_retrieval.encoders.visual import VisualEncoder
 from video_retrieval.extraction.audio import extract_audio
 from video_retrieval.extraction.keyframes import extract_keyframes
 from video_retrieval.models import AudioTrack, IndexResult, KeyFrame, Shot, TextDocument
-from video_retrieval.storage.elasticsearch_store import ElasticsearchStore
-from video_retrieval.storage.qdrant_store import QdrantStore
+from video_retrieval.storage.factory import create_qdrant_store, create_text_store
 from video_retrieval.text.asr import ASREngine
 from video_retrieval.text.ocr import OCREngine
 
@@ -28,8 +27,8 @@ class VideoIndexer:
         visual: VisualEncoder | None = None,
         ocr: OCREngine | None = None,
         asr: ASREngine | None = None,
-        qdrant: QdrantStore | None = None,
-        es: ElasticsearchStore | None = None,
+        qdrant=None,
+        es=None,
     ):
         self.settings = settings or get_settings()
         self.settings.ensure_dirs()
@@ -58,15 +57,15 @@ class VideoIndexer:
         return self._asr
 
     @property
-    def qdrant(self) -> QdrantStore:
+    def qdrant(self):
         if self._qdrant is None:
-            self._qdrant = QdrantStore(self.settings)
+            self._qdrant = create_qdrant_store(self.settings)
         return self._qdrant
 
     @property
-    def es(self) -> ElasticsearchStore:
+    def es(self):
         if self._es is None:
-            self._es = ElasticsearchStore(self.settings)
+            self._es = create_text_store(self.settings)
         return self._es
 
     def index_video(

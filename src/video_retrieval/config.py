@@ -63,6 +63,34 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # Google Drive cloud storage for indexed data
+    drive_mount: str = "/content/drive"
+    drive_data_path: str = "MyDrive/video-retrieval"
+    # Laptop: Google Drive desktop sync folder (e.g. ~/Library/CloudStorage/.../video-retrieval)
+    drive_local_path: str = ""
+
+    # Remote compute via google-colab-cli (laptop hosts UI, Colab runs search/index GPU work)
+    remote_compute: str = ""  # "" | "colab"
+    colab_session: str = "video-retrieval"
+    colab_cli: str = "colab"
+    colab_gpu: str = "T4"
+    colab_high_mem: bool = False
+    colab_timeout_sec: float = 600.0
+    colab_remote_data_dir: str = "/content/data"
+    colab_elasticsearch_install_dir: str = "/content/elasticsearch"
+    colab_runtime: bool = False
+    # When false (default), you start/bootstrap Colab manually (see scripts/colab/MANUAL_SETUP.md).
+    colab_auto_manage: bool = False
+    colab_env_file: str = "/content/video-retrieval/.env.colab"
+
+    @property
+    def uses_remote_compute(self) -> bool:
+        return self.remote_compute.strip().lower() == "colab"
+
+    @property
+    def qdrant_dir(self) -> Path:
+        return self.data_dir / "qdrant"
+
     @property
     def videos_dir(self) -> Path:
         return self.data_dir / "videos"
@@ -95,9 +123,47 @@ class Settings(BaseSettings):
             path = Path.cwd() / path
         return self.model_copy(update={"data_dir": path.resolve()})
 
+    def remote_settings_overrides(self) -> dict[str, object]:
+        """Settings applied on the Colab VM (file-backed Qdrant + local Elasticsearch)."""
+        return {
+            "qdrant_url": "local",
+            "elasticsearch_url": self.elasticsearch_url,
+            "visual_backend": self.visual_backend,
+            "ocr_backend": self.ocr_backend,
+            "asr_backend": self.asr_backend,
+            "query_planner": self.query_planner,
+            "gemini_model": self.gemini_model,
+            "gemini_rpm": self.gemini_rpm,
+            "gemini_max_retries": self.gemini_max_retries,
+            "gemini_batch_size": self.gemini_batch_size,
+            "whisper_model": self.whisper_model,
+            "siglip_model_id": self.siglip_model_id,
+            "beit3_model_id": self.beit3_model_id,
+            "siglip_dim": self.siglip_dim,
+            "beit3_dim": self.beit3_dim,
+            "qdrant_collection": self.qdrant_collection,
+            "es_index": self.es_index,
+            "drive_mount": self.drive_mount,
+            "drive_data_path": self.drive_data_path,
+            "drive_local_path": self.drive_local_path,
+            "colab_elasticsearch_install_dir": self.colab_elasticsearch_install_dir,
+        }
 
-def get_settings(*, data_dir: Path | str | None = None) -> Settings:
-    settings = Settings()
+
+def get_settings(
+    *,
+    data_dir: Path | str | None = None,
+    colab: bool = False,
+) -> Settings:
+    env_file: Path | str | None = None
+    if colab:
+        colab_env = Path("/content/video-retrieval/.env.colab")
+        if colab_env.is_file():
+            env_file = colab_env
+
+    settings = Settings(_env_file=env_file) if env_file else Settings()
+    if colab:
+        settings = settings.model_copy(update={"qdrant_url": "local", "colab_runtime": True})
     if data_dir is not None:
         return settings.with_data_dir(data_dir)
     return settings

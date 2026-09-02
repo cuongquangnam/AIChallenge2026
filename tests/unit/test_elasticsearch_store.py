@@ -73,3 +73,27 @@ def test_index_documents_empty_short_circuits(settings) -> None:
     store = ElasticsearchStore(settings, client=client)
     assert store.index_documents([]) == 0
     client.bulk.assert_not_called()
+
+
+@pytest.mark.unit
+def test_bulk_import_ndjson(settings, tmp_path) -> None:
+    client = MagicMock()
+    client.indices.exists.return_value = False
+    store = ElasticsearchStore(settings, client=client)
+    export_path = tmp_path / "video_text.ndjson"
+    export_path.write_text(
+        '\n'.join(
+            [
+                '{"index":{"_index":"video_text","_id":"clip:asr:0"}}',
+                '{"video_id":"clip","source":"asr","text":"hello world"}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    imported = store.bulk_import_ndjson(export_path)
+    assert imported == 1
+    client.bulk.assert_called_once()
+    ops = client.bulk.call_args.kwargs["operations"]
+    assert ops[0]["index"]["_id"] == "clip:asr:0"
+    assert ops[1]["text"] == "hello world"

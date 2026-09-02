@@ -37,7 +37,7 @@ async def _lifespan(_app: FastAPI):
     from video_retrieval.runtime import _runtime
 
     configure_logging()
-    if _runtime is None:
+    if _runtime is None and not settings.uses_remote_compute:
         init_runtime(settings)
     yield
 
@@ -118,7 +118,26 @@ class ResolveSubmissionRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    payload: dict[str, str] = {"status": "ok"}
+    if settings.uses_remote_compute:
+        payload["compute"] = "colab"
+        payload["storage"] = "drive"
+        payload["drive_path"] = settings.drive_data_path or settings.drive_local_path or "(unset)"
+    else:
+        payload["compute"] = "local"
+    return payload
+
+
+_remote_gateway = None
+
+
+def _get_remote_gateway():
+    global _remote_gateway
+    if _remote_gateway is None:
+        from video_retrieval.remote.gateway import RemoteComputeGateway
+
+        _remote_gateway = RemoteComputeGateway(settings)
+    return _remote_gateway
 
 
 def _index_settings(data_dir: str | None = None) -> Settings:
@@ -284,6 +303,19 @@ def _rows_to_csv(rows: list[tuple[str, int]]) -> str:
 
 @app.post("/search")
 def search(body: SearchRequest):
+    if settings.uses_remote_compute:
+        try:
+            payload = _get_remote_gateway().search(
+                body.query,
+                mode=body.mode,
+                limit=body.limit,
+                vector_name=body.vector_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Remote Colab search failed: %s", exc)
+            raise HTTPException(status_code=502, detail=f"Remote search failed: {exc}") from exc
+        return _enrich_search_payload(payload)
+
     service = get_runtime().search
     if body.mode == "ocr":
         response = service.search_ocr(body.query, limit=body.limit)
@@ -300,9 +332,46 @@ def search(body: SearchRequest):
     return _enrich_search_payload(response.model_dump(mode="json"))
 
 
+def _chains_to_csv_lines(chains: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for chain in chains:
+        video_id = chain.get("video_id")
+        frames = [
+            str(event.get("frame_index"))
+            for event in chain.get("events") or []
+            if event.get("frame_index") is not None
+        ]
+        if video_id and frames:
+            lines.append(f"{video_id},{','.join(frames)}")
+    return lines
+
+
+def _kis_submission_rows(raw: list[Any]) -> list[tuple[str, int]]:
+    rows: list[tuple[str, int]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            rows.append((str(item["video_id"]), int(item["frame_index"])))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            rows.append((str(item[0]), int(item[1])))
+    return rows
+
+
 @app.post("/kis")
 def kis_search(body: KisRequest):
     try:
+        if settings.uses_remote_compute:
+            payload = _get_remote_gateway().kis(body.query, limit=body.limit)
+            payload = _enrich_chains(payload)
+            payload["hits"] = _enrich_search_payload({"hits": payload.get("hits") or []})["hits"]
+            payload["query_id"] = (body.query_id or "").strip()
+            rows = _kis_submission_rows(payload.get("submission_rows") or [])
+            payload["submission_rows"] = [
+                {"video_id": video_id, "frame_index": frame_idx}
+                for video_id, frame_idx in rows
+            ]
+            payload["csv_text"] = _rows_to_csv(rows)
+            return payload
+
         result = get_runtime().kis.run(body.query, limit=body.limit)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -325,6 +394,14 @@ def kis_search(body: KisRequest):
 @app.post("/qa")
 def answer_question(body: QARequest):
     try:
+        if settings.uses_remote_compute:
+            payload = _get_remote_gateway().qa(
+                body.question,
+                limit=body.limit,
+                frame_radius=body.frame_radius,
+            )
+            return _enrich_qa_payload(payload)
+
         result = get_runtime().qa.answer(
             body.question,
             limit=body.limit,
@@ -346,6 +423,10 @@ def answer_question(body: QARequest):
         raise HTTPException(status_code=502, detail=f"QA backend error: {exc}") from exc
 
     payload = result.model_dump(mode="json")
+    return _enrich_qa_payload(payload)
+
+
+def _enrich_qa_payload(payload: dict[str, Any]) -> dict[str, Any]:
     video_available: dict[str, bool] = {}
     enriched_results = []
     for item in payload.get("results") or []:
@@ -388,19 +469,23 @@ def answer_question(body: QARequest):
         enriched_hits.append(item)
     payload["hits"] = enriched_hits
     payload["video_url"] = _video_url_for_hit(
-        {"video_id": result.video_id}, available=video_available
+        {"video_id": payload.get("video_id")}, available=video_available
     )
+    qa_hits = payload.get("hits") or []
     payload["csv_text"] = _qa_rows_to_csv(
-        [(h.video_id, h.frame_id, h.answer) for h in result.hits]
+        [
+            (str(h.get("video_id", "")), int(h.get("frame_id", 0)), str(h.get("answer", "")))
+            for h in qa_hits
+        ]
     )
     payload["evidence_hit"] = enriched_hits[0] if enriched_hits else {
-        "video_id": result.video_id,
-        "frame_index": result.frame_id,
-        "frame_id": result.frame_id,
+        "video_id": payload.get("video_id"),
+        "frame_index": payload.get("frame_id"),
+        "frame_id": payload.get("frame_id"),
         "score": 1.0,
         "source": "qa",
-        "video_url": payload["video_url"],
-        "answer": result.answer,
+        "video_url": payload.get("video_url"),
+        "answer": payload.get("answer"),
     }
     return payload
 
@@ -433,6 +518,15 @@ def _qa_rows_to_csv(rows: list[tuple[str, int, str]]) -> str:
 @app.post("/trake")
 def trake_search(body: TrakeRequest):
     try:
+        if settings.uses_remote_compute:
+            payload = _get_remote_gateway().trake(body.query, top_chains=body.top_chains)
+            payload = _enrich_chains(payload)
+            csv_lines = _chains_to_csv_lines(payload.get("chains") or [])
+            if csv_lines:
+                payload["csv_text"] = "\n".join(csv_lines) + "\n"
+                payload["csv_row"] = csv_lines[0]
+            return payload
+
         result = get_runtime().trake.run(body.query, top_chains=body.top_chains)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -9,6 +9,7 @@ from video_retrieval.events.pipeline import EventChainTaskBase
 from video_retrieval.events.plan_utils import event_description, questioned_frame
 from video_retrieval.events.searcher import EventChainSearcher
 from video_retrieval.models import EventChain, QAAnswerHit, QAResult, QAResultItem, SearchHit
+from video_retrieval.storage.qa_video_sync import ensure_qa_videos_from_drive
 from video_retrieval.qa.frames import QAFrameSampler
 from video_retrieval.qa.llm import QAModel, QASingleFrameRequest, create_qa_model
 from video_retrieval.query_stages import log_query_stage
@@ -57,6 +58,13 @@ class QAService(EventChainTaskBase):
         )
         if not chains:
             raise RuntimeError("No aligned event chains found for this question")
+
+        pulled_videos = ensure_qa_videos_from_drive(
+            self.settings,
+            {chain.video_id for chain in chains},
+        )
+        if pulled_videos:
+            log_query_stage("qa", "drive_video_pull", videos=len(pulled_videos))
 
         log_query_stage("qa", "vlm_answer", chains=len(chains))
         results = self._answer_chains(

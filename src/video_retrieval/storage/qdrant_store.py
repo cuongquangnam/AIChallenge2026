@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from pathlib import Path
 from typing import Any
 
 from qdrant_client import QdrantClient
@@ -9,6 +10,7 @@ from qdrant_client.http import models as qm
 
 from video_retrieval.config import Settings
 from video_retrieval.models import SearchHit, VisualEmbedding
+from video_retrieval.storage.backends import is_local_qdrant, qdrant_storage_path
 
 
 class QdrantStore:
@@ -20,6 +22,10 @@ class QdrantStore:
             self.client = client
         elif settings.qdrant_url in {":memory:", "memory"}:
             self.client = QdrantClient(location=":memory:")
+        elif is_local_qdrant(settings.qdrant_url):
+            storage_path = qdrant_storage_path(settings)
+            Path(storage_path).mkdir(parents=True, exist_ok=True)
+            self.client = QdrantClient(path=storage_path)
         else:
             self.client = QdrantClient(url=settings.qdrant_url)
         self.collection = settings.qdrant_collection

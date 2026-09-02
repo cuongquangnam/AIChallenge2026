@@ -1,4 +1,6 @@
 .env
+.env.colab
+**/.env.colab
 .venv/
 venv/
 __pycache__/

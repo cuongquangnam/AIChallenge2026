@@ -1,0 +1,266 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+import subprocess
+import tempfile
+import textwrap
+from pathlib import Path
+from typing import Any
+
+from video_retrieval.config import Settings
+from video_retrieval.remote.models import RemoteJobRequest, RemoteJobResponse
+from video_retrieval.storage.data_sync import validate_remote_storage
+from video_retrieval.storage.sync_paths import SESSION_PULL_PATHS
+
+logger = logging.getLogger(__name__)
+
+_WORKER_MODULE = "video_retrieval.remote.worker"
+
+
+class ColabRunner:
+    """Run search tasks on a Colab VM via google-colab-cli from this machine."""
+
+    def __init__(self, settings: Settings):
+        validate_remote_storage(settings)
+        self.settings = settings
+        self._bootstrapped = False
+        self._session_data_pulled = False
+
+    def search(
+        self,
+        query: str,
+        *,
+        mode: str = "mixed",
+        limit: int = 10,
+        vector_name: str = "siglip",
+    ) -> dict[str, Any]:
+        request = self._base_request(
+            job="search",
+            query=query,
+            mode=mode,  # type: ignore[arg-type]
+            limit=limit,
+            vector_name=vector_name,  # type: ignore[arg-type]
+        )
+        return self._run(request).result or {}
+
+    def kis(
+        self,
+        query: str,
+        *,
+        limit: int = 100,
+        top_chains: int | None = None,
+    ) -> dict[str, Any]:
+        request = self._base_request(
+            job="kis",
+            query=query,
+            limit=limit,
+            top_chains=top_chains,
+        )
+        return self._run(request).result or {}
+
+    def qa(
+        self,
+        question: str,
+        *,
+        limit: int = 24,
+        frame_radius: int | None = None,
+    ) -> dict[str, Any]:
+        request = self._base_request(
+            job="qa",
+            query=question,
+            limit=limit,
+            frame_radius=frame_radius,
+        )
+        return self._run(request).result or {}
+
+    def trake(
+        self,
+        query: str,
+        *,
+        top_chains: int | None = None,
+    ) -> dict[str, Any]:
+        request = self._base_request(
+            job="trake",
+            query=query,
+            top_chains=top_chains,
+        )
+        return self._run(request).result or {}
+
+    def ensure_session(self) -> None:
+        """Verify Colab is reachable; optionally auto-bootstrap when colab_auto_manage=true."""
+        if not self._session_running():
+            raise RuntimeError(
+                f"Colab session {self.settings.colab_session!r} is not running. "
+                "Start it manually and run scripts/colab/MANUAL_SETUP.md steps."
+            )
+        if not self.settings.colab_auto_manage:
+            return
+        if not self._bootstrapped:
+            self._bootstrap_remote()
+        if not self._session_data_pulled:
+            self._pull_session_data()
+            self._session_data_pulled = True
+
+    def _pull_session_data(self) -> None:
+        request = self._base_request(
+            job="session_pull",
+            pull_paths=list(SESSION_PULL_PATHS),
+        )
+        response = self._exec_request(request)
+        if not response.ok:
+            raise RuntimeError(response.error or "Session data pull failed")
+        pulled = (response.result or {}).get("pulled", 0)
+        es_info = (response.result or {}).get("elasticsearch") or {}
+        logger.info(
+            "Pulled %s file(s) from Drive into %s at session start",
+            pulled,
+            self.settings.colab_remote_data_dir,
+        )
+        if es_info:
+            logger.info(
+                "Elasticsearch loaded %s document(s) from %s",
+                es_info.get("imported", 0),
+                es_info.get("source", "unknown"),
+            )
+
+    def _base_request(self, *, job: str, **kwargs: Any) -> RemoteJobRequest:
+        return RemoteJobRequest(
+            job=job,  # type: ignore[arg-type]
+            drive_mount=self.settings.drive_mount,
+            drive_data_path=self.settings.drive_data_path,
+            drive_local_path=self.settings.drive_local_path,
+            remote_data_dir=self.settings.colab_remote_data_dir,
+            settings_overrides=self.settings.remote_settings_overrides(),
+            **kwargs,
+        )
+
+    def _run(self, request: RemoteJobRequest) -> RemoteJobResponse:
+        self.ensure_session()
+        return self._exec_request(request)
+
+    def _exec_request(self, request: RemoteJobRequest) -> RemoteJobResponse:
+        with tempfile.TemporaryDirectory(prefix="vr-colab-") as tmp_dir:
+            request_path = Path(tmp_dir) / "request.json"
+            request_path.write_text(
+                request.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            remote_request = f"/content/{request_path.name}"
+            self._colab(
+                "upload",
+                "-s",
+                self.settings.colab_session,
+                str(request_path),
+                remote_request,
+            )
+            payload = self._colab_exec_worker(remote_request)
+        response = RemoteJobResponse.model_validate_json(payload)
+        if not response.ok:
+            raise RuntimeError(response.error or "Remote Colab job failed")
+        return response
+
+    def _colab_exec_worker(self, remote_request_path: str) -> str:
+        script = self._worker_script(remote_request_path)
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as handle:
+            handle.write(script)
+            script_path = handle.name
+        try:
+            completed = self._colab(
+                "exec",
+                "-s",
+                self.settings.colab_session,
+                "-f",
+                script_path,
+                timeout=self.settings.colab_timeout_sec,
+                capture_output=True,
+            )
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip() or "colab exec failed"
+            raise RuntimeError(detail)
+        return _extract_json_payload(completed.stdout)
+
+    def _worker_script(self, remote_request_path: str) -> str:
+        return textwrap.dedent(
+            f"""
+            import json
+            from {_WORKER_MODULE} import run_request
+
+            with open({remote_request_path!r}, encoding="utf-8") as handle:
+                request = json.load(handle)
+            response = run_request(request)
+            print(json.dumps(response.model_dump(mode="json"), ensure_ascii=False))
+            if not response.ok:
+                raise SystemExit(1)
+            """
+        ).strip() + "\n"
+
+    def _bootstrap_remote(self) -> None:
+        repo_root = _project_root()
+        remote_root = "/content/video-retrieval"
+        self._colab("upload", "-s", self.settings.colab_session, str(repo_root), remote_root)
+        bootstrap = textwrap.dedent(
+            f"""
+            import subprocess, sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-e", "{remote_root}[ml]"])
+            """
+        ).strip()
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as handle:
+            handle.write(bootstrap + "\n")
+            bootstrap_path = handle.name
+        try:
+            self._colab("exec", "-s", self.settings.colab_session, "-f", bootstrap_path)
+        finally:
+            Path(bootstrap_path).unlink(missing_ok=True)
+        self._bootstrapped = True
+
+    def _create_session(self) -> None:
+        args = [
+            "new",
+            "-s",
+            self.settings.colab_session,
+        ]
+        if self.settings.colab_gpu:
+            args.extend(["--gpu", self.settings.colab_gpu])
+        if self.settings.colab_high_mem:
+            args.append("--high-mem")
+        self._colab(*args)
+
+    def _session_running(self) -> bool:
+        completed = self._colab(
+            "status",
+            "-s",
+            self.settings.colab_session,
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            return False
+        output = completed.stdout.lower()
+        return "no active session" not in output and "not found" not in output
+
+    def _colab(self, *args: str, timeout: float | None = None, capture_output: bool = False, check: bool = True):
+        command = [self.settings.colab_cli, *args]
+        return subprocess.run(
+            command,
+            check=check,
+            capture_output=capture_output,
+            text=True,
+            timeout=timeout,
+            env=os.environ.copy(),
+        )
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _extract_json_payload(stdout: str) -> str:
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    for line in reversed(lines):
+        if line.startswith("{") and line.endswith("}"):
+            return line
+    raise RuntimeError(f"Colab worker did not return JSON. Output was:\n{stdout}")

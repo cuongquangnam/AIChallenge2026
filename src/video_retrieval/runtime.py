@@ -25,11 +25,11 @@ class AppRuntime:
     """Process-wide search + chain task services (models loaded once)."""
 
     settings: Settings
-    search: SearchService
-    chain_search: EventChainSearcher
-    kis: KisService
-    qa: QAService
-    trake: TrakeService
+    search: SearchService | None
+    chain_search: EventChainSearcher | None
+    kis: KisService | None
+    qa: QAService | None
+    trake: TrakeService | None
     siglip_pool: ModelPool[VisualEncoder] | None = None
     rerank_pool: ModelPool[CrossEncoderReranker] | None = None
 
@@ -60,18 +60,15 @@ def _build_reranker(cfg: Settings) -> tuple[Reranker | None, ModelPool[CrossEnco
     return PooledCrossEncoderReranker(pool, settings=cfg), pool
 
 
-def init_runtime(settings: Settings | None = None, *, force: bool = False) -> AppRuntime:
-    """Build or rebuild shared services for this process."""
-    global _runtime
-    if _runtime is not None and not force:
-        return _runtime
+def build_task_runtime(settings: Settings | None = None) -> AppRuntime:
+    """Build full search + KIS/QA/TRAKE services (local process or Colab worker)."""
     cfg = settings or get_settings()
-    logger.info("Initializing shared search runtime")
+    logger.info("Initializing task runtime")
     visual, siglip_pool = _build_siglip_pool(cfg)
     search = SearchService(cfg, visual=visual)
     reranker, rerank_pool = _build_reranker(cfg)
     chain_search = EventChainSearcher(cfg, search=search, reranker=reranker)
-    _runtime = AppRuntime(
+    runtime = AppRuntime(
         settings=cfg,
         search=search,
         chain_search=chain_search,
@@ -82,10 +79,33 @@ def init_runtime(settings: Settings | None = None, *, force: bool = False) -> Ap
         rerank_pool=rerank_pool,
     )
     logger.info(
-        "Shared search runtime ready (SigLIP pool=%s, BLIP pool=%s)",
+        "Task runtime ready (SigLIP pool=%s, BLIP pool=%s)",
         siglip_pool.size if siglip_pool else 0,
         rerank_pool.size if rerank_pool else 0,
     )
+    return runtime
+
+
+def init_runtime(settings: Settings | None = None, *, force: bool = False) -> AppRuntime:
+    """Build or rebuild shared services for this process."""
+    global _runtime
+    if _runtime is not None and not force:
+        return _runtime
+    cfg = settings or get_settings()
+    if cfg.uses_remote_compute:
+        logger.info(
+            "Remote compute enabled (REMOTE_COMPUTE=colab); skipping local model load"
+        )
+        _runtime = AppRuntime(
+            settings=cfg,
+            search=None,  # type: ignore[arg-type]
+            chain_search=None,  # type: ignore[arg-type]
+            kis=None,  # type: ignore[arg-type]
+            qa=None,  # type: ignore[arg-type]
+            trake=None,  # type: ignore[arg-type]
+        )
+        return _runtime
+    _runtime = build_task_runtime(cfg)
     return _runtime
 
 
