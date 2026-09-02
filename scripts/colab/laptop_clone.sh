@@ -1,20 +1,46 @@
 #!/usr/bin/env bash
-# Clone/update the repo on Colab via git (run on laptop after session is up).
-# Set COLAB_REPO_URL in Colab Secrets — the URL is NOT passed from this shell.
+# Clone/update the repo on Colab via git (reads COLAB_REPO_* from laptop .env).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SESSION="${COLAB_SESSION:-video-retrieval}"
 CLI="${COLAB_CLI:-colab}"
+TIMEOUT="${COLAB_TIMEOUT_SEC:-600}"
+DOTENV="$ROOT/.env"
+# shellcheck source=lib.sh
+source "$(dirname "$0")/lib.sh"
 
 echo "Checking session $SESSION..."
-if ! "$CLI" status -s "$SESSION" 2>/dev/null | grep -qi "running\|active"; then
-  echo "Session does not look active. Start it first:"
+if ! colab_session_active "$CLI" "$SESSION"; then
+  echo "Session is not reachable. Start it first:"
   echo "  ./scripts/colab/laptop_start_session.sh"
   exit 1
 fi
+status_out=$("$CLI" status -s "$SESSION" 2>&1 || true)
+echo "$status_out"
 
-echo "Cloning/updating repo on Colab (reads COLAB_REPO_URL from Colab Secrets)..."
-echo "Add COLAB_REPO_URL=https://github.com/you/AIChallenge2026_2.git in Colab Secrets first."
-"$CLI" exec -s "$SESSION" -f "$ROOT/scripts/colab/clone_remote.py"
-echo "Clone done. Next: ./scripts/colab/laptop_set_remote_env.sh"
+REPO_URL="$(dotenv_get "$DOTENV" COLAB_REPO_URL || true)"
+REPO_BRANCH="$(dotenv_get "$DOTENV" COLAB_REPO_BRANCH || true)"
+GITHUB_TOKEN="$(dotenv_get "$DOTENV" GITHUB_TOKEN || true)"
+
+ENV_ARGS=()
+[[ -n "$REPO_URL" ]] && ENV_ARGS+=("COLAB_REPO_URL=$REPO_URL")
+[[ -n "$REPO_BRANCH" ]] && ENV_ARGS+=("COLAB_REPO_BRANCH=$REPO_BRANCH")
+[[ -n "$GITHUB_TOKEN" ]] && ENV_ARGS+=("GITHUB_TOKEN=$GITHUB_TOKEN")
+
+if [[ -z "$REPO_URL" ]]; then
+  echo "COLAB_REPO_URL is required in $DOTENV"
+  exit 1
+fi
+
+echo "Cloning/updating repo on Colab (branch=${REPO_BRANCH:-main})..."
+if ! colab_exec_script "$CLI" "$SESSION" "$TIMEOUT" "$ROOT/scripts/colab/clone_remote.py" "${ENV_ARGS[@]}"; then
+  echo "Clone failed."
+  exit 1
+fi
+if ! printf 'import os, sys\nsys.exit(0 if os.path.isdir("/content/video-retrieval/.git") else 1)\n' \
+  | "$CLI" exec -s "$SESSION" --timeout 30; then
+  echo "Clone did not create /content/video-retrieval/.git — check repo URL/branch and retry."
+  exit 1
+fi
+echo "Clone done. Next: ./scripts/colab/laptop_upload_env.sh && ./scripts/colab/laptop_bootstrap.sh"

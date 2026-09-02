@@ -21,7 +21,7 @@ def main() -> None:
     env_file = REPO_ROOT / ".env.colab"
     if not env_file.is_file():
         raise SystemExit(
-            f"Missing {env_file}. On Colab run: python scripts/colab/set_remote_env.py"
+            f"Missing {env_file}. Run: ./scripts/colab/laptop_upload_env.sh"
         )
 
     print("Installing video-retrieval[ml]...")

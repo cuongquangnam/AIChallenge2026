@@ -6,10 +6,12 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SESSION="${COLAB_SESSION:-video-retrieval}"
 CLI="${COLAB_CLI:-colab}"
 REMOTE_ROOT="/content/video-retrieval"
+# shellcheck source=lib.sh
+source "$(dirname "$0")/lib.sh"
 
 echo "Checking session $SESSION..."
-if ! "$CLI" status -s "$SESSION" 2>/dev/null | grep -qi "running\|active"; then
-  echo "Session does not look active. Start it first:"
+if ! colab_session_active "$CLI" "$SESSION"; then
+  echo "Session is not reachable. Start it first:"
   echo "  ./scripts/colab/laptop_start_session.sh"
   exit 1
 fi

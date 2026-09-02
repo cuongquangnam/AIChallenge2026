@@ -157,9 +157,13 @@ def get_settings(
 ) -> Settings:
     env_file: Path | str | None = None
     if colab:
-        colab_env = Path("/content/video-retrieval/.env.colab")
-        if colab_env.is_file():
-            env_file = colab_env
+        for candidate in (
+            Path("/content/video-retrieval/.env.colab"),
+            Path("/content/.env.colab"),
+        ):
+            if candidate.is_file():
+                env_file = candidate
+                break
 
     settings = Settings(_env_file=env_file) if env_file else Settings()
     if colab:

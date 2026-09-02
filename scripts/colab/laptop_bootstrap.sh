@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pip install + Drive pull + Elasticsearch load on Colab (run on laptop after set_remote_env).
+# pip install + Drive pull + Elasticsearch load on Colab (after laptop_upload_env.sh).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

@@ -14,4 +14,4 @@ fi
 
 echo "Starting Colab session: $SESSION (GPU=$GPU)"
 "$CLI" "${ARGS[@]}"
-echo "Session started. Next: ./scripts/colab/laptop_clone.sh"
+echo "Session started. Next: ./scripts/colab/laptop_setup_all.sh"

@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
-import sys
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -58,7 +57,8 @@ def clone_or_update(*, repo_url: str, branch: str) -> None:
     repo_url = _auth_repo_url(repo_url.strip())
     if not repo_url:
         raise SystemExit(
-            "COLAB_REPO_URL is required. Add it to Colab Secrets or pass --repo-url."
+            "COLAB_REPO_URL is required.\n"
+            "Set COLAB_REPO_URL in laptop .env (or pass --repo-url)."
         )
 
     if REPO_ROOT.is_dir() and (REPO_ROOT / ".git").is_dir():
@@ -87,7 +87,7 @@ def main() -> None:
         default=_secret("COLAB_REPO_BRANCH") or os.environ.get("COLAB_REPO_BRANCH", DEFAULT_BRANCH),
         help=f"Branch to checkout (default: {DEFAULT_BRANCH})",
     )
-    args = parser.parse_args()
+    args, _unknown = parser.parse_known_args()
     clone_or_update(repo_url=args.repo_url, branch=args.branch)
     print(f"Ready at {REPO_ROOT}")
 
