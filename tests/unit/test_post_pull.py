@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from video_retrieval.storage.drive_sync import _copy_keyframes
 from video_retrieval.storage.post_pull import extract_keyframes_zip
 from video_retrieval.storage.qdrant_bootstrap import find_qdrant_snapshot, resolve_colab_qdrant_url
 
@@ -64,3 +65,19 @@ def test_extract_keyframes_zip_skips_when_already_present(tmp_path: Path) -> Non
     result = extract_keyframes_zip(keyframes_dir, progress=False)
     assert result["action"] == "skip"
     assert result["reason"] == "already_extracted"
+
+
+@pytest.mark.unit
+def test_copy_keyframes_prefers_zip_over_loose_files(tmp_path: Path) -> None:
+    source = tmp_path / "drive" / "keyframes"
+    loose = source / "L21_V001"
+    loose.mkdir(parents=True)
+    (loose / "shot_0001_middle.jpg").write_bytes(b"loose")
+    (source / "keyframes.zip").write_bytes(b"zip")
+    dest = tmp_path / "data" / "keyframes"
+
+    copied = _copy_keyframes(source, dest, progress=False)
+
+    assert copied == 1
+    assert (dest / "keyframes.zip").read_bytes() == b"zip"
+    assert not (dest / "L21_V001").exists()

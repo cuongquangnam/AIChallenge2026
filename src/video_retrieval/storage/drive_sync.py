@@ -116,12 +116,15 @@ class DriveDataSync:
                 f"[pull {idx}/{total_paths}] {path_name} from {src} ...",
                 flush=True,
             )
-            n = _copy_tree(
-                src,
-                self.local_dir / path_name,
-                label=path_name,
-                progress=True,
-            )
+            if path_name == "keyframes":
+                n = _copy_keyframes(src, self.local_dir / path_name, progress=True)
+            else:
+                n = _copy_tree(
+                    src,
+                    self.local_dir / path_name,
+                    label=path_name,
+                    progress=True,
+                )
             print(f"[pull {idx}/{total_paths}] {path_name}: copied {n} file(s)", flush=True)
             copied += n
         return copied
@@ -256,6 +259,18 @@ def _copy_tree(
             flush=True,
         )
     return copied
+
+
+def _copy_keyframes(source: Path, destination: Path, *, progress: bool) -> int:
+    """Copy keyframes from Drive, preferring a zip archive over many loose files."""
+    zip_path = source / "keyframes.zip"
+    if zip_path.is_file():
+        if progress:
+            print(f"  found {zip_path.name}; copying archive instead of loose keyframes", flush=True)
+        destination.mkdir(parents=True, exist_ok=True)
+        _copy_file(zip_path, destination / zip_path.name, timeout_sec=60.0)
+        return 1
+    return _copy_tree(source, destination, label="keyframes", progress=progress)
 
 
 def _copy_file(src: Path, dest: Path, *, timeout_sec: float) -> None:

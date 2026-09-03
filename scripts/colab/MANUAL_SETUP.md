@@ -43,6 +43,14 @@ Or step by step:
 ./scripts/colab/laptop_start_worker.sh   # long-running process; loads SigLIP/BLIP once
 ```
 
+While bootstrap is running, monitor progress from another laptop terminal:
+
+```bash
+./scripts/colab/laptop_monitor_progress.sh        # poll every 15s
+./scripts/colab/laptop_monitor_progress.sh 30     # poll every 30s
+./scripts/colab/laptop_monitor_progress.sh --once # single snapshot
+```
+
 Drive auth cannot run inside `colab console` / raw `python3` (`drive.mount` needs the notebook UI).
 The laptop scripts call `colab drivemount` for you. Manual equivalent:
 
