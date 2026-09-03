@@ -79,8 +79,6 @@ def ensure_elasticsearch(
         "-E",
         "http.port=9200",
         "-E",
-        "bootstrap.system_call_filter=false",
-        "-E",
         "ingest.geoip.downloader.enabled=false",
     ]
     env = os.environ.copy()
