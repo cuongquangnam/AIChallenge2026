@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from video_retrieval.storage.sync_paths import QA_PULL_PATHS, SEARCH_PULL_PATHS
@@ -177,7 +179,9 @@ def _copy_tree(
     *,
     label: str = "",
     progress: bool = False,
-    progress_every: int = 500,
+    progress_every: int = 50,
+    skip_existing: bool = True,
+    file_timeout_sec: float = 60.0,
 ) -> int:
     if not source.exists():
         if progress:
@@ -185,7 +189,7 @@ def _copy_tree(
         return 0
     if source.is_file():
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
+        _copy_file(source, destination, timeout_sec=file_timeout_sec)
         return 1
 
     files = [p for p in source.rglob("*") if p.is_file()]
@@ -193,14 +197,69 @@ def _copy_tree(
     name = label or source.name
     if progress:
         print(f"  scanning {name}: {total} file(s)", flush=True)
+
     copied = 0
+    skipped = 0
+    failed = 0
+    last_beat = time.monotonic()
     for src in files:
         rel = src.relative_to(source)
         dest = destination / rel
+        now = time.monotonic()
+        if progress and (now - last_beat) >= 10.0:
+            print(
+                f"  {name}: still working… {copied + skipped + failed}/{total} "
+                f"(copied={copied} skipped={skipped} failed={failed}) current={rel}",
+                flush=True,
+            )
+            last_beat = now
+
+        if skip_existing and dest.is_file():
+            try:
+                if dest.stat().st_size == src.stat().st_size:
+                    skipped += 1
+                    if progress and ((copied + skipped) % progress_every == 0):
+                        done = copied + skipped + failed
+                        pct = (100.0 * done / total) if total else 100.0
+                        print(
+                            f"  {name}: {done}/{total} ({pct:.1f}%) "
+                            f"[copied={copied} skipped={skipped}]",
+                            flush=True,
+                        )
+                    continue
+            except OSError:
+                pass
+
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
-        copied += 1
-        if progress and (copied % progress_every == 0 or copied == total):
-            pct = (100.0 * copied / total) if total else 100.0
-            print(f"  {name}: {copied}/{total} ({pct:.1f}%)", flush=True)
+        try:
+            _copy_file(src, dest, timeout_sec=file_timeout_sec)
+            copied += 1
+        except Exception as exc:  # noqa: BLE001 - keep pulling other files
+            failed += 1
+            if progress:
+                print(f"  WARN skip {rel}: {exc}", flush=True)
+            continue
+
+        done = copied + skipped + failed
+        if progress and (done % progress_every == 0 or done == total):
+            pct = (100.0 * done / total) if total else 100.0
+            print(
+                f"  {name}: {done}/{total} ({pct:.1f}%) "
+                f"[copied={copied} skipped={skipped} failed={failed}]",
+                flush=True,
+            )
+            last_beat = time.monotonic()
+
+    if progress:
+        print(
+            f"  {name}: finished copied={copied} skipped={skipped} failed={failed}",
+            flush=True,
+        )
     return copied
+
+
+def _copy_file(src: Path, dest: Path, *, timeout_sec: float) -> None:
+    """Copy file contents (no metadata). Abort if Drive FUSE stalls."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(shutil.copyfile, src, dest)
+        future.result(timeout=timeout_sec)
