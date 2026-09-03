@@ -13,7 +13,7 @@ from qdrant_client import QdrantClient
 logger = logging.getLogger(__name__)
 
 QDRANT_VERSION = "1.12.5"
-QDRANT_ARTIFACT = f"qdrant-{QDRANT_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+QDRANT_ARTIFACT = "qdrant-x86_64-unknown-linux-gnu.tar.gz"
 QDRANT_DOWNLOAD_URL = (
     f"https://github.com/qdrant/qdrant/releases/download/v{QDRANT_VERSION}/{QDRANT_ARTIFACT}"
 )
