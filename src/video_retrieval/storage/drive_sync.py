@@ -107,8 +107,21 @@ class DriveDataSync:
         selected = list(paths or SEARCH_PULL_PATHS)
         source_root = self.remote_root()
         copied = 0
-        for path_name in selected:
-            copied += _copy_tree(source_root / path_name, self.local_dir / path_name)
+        total_paths = len(selected)
+        for idx, path_name in enumerate(selected, start=1):
+            src = source_root / path_name
+            print(
+                f"[pull {idx}/{total_paths}] {path_name} from {src} ...",
+                flush=True,
+            )
+            n = _copy_tree(
+                src,
+                self.local_dir / path_name,
+                label=path_name,
+                progress=True,
+            )
+            print(f"[pull {idx}/{total_paths}] {path_name}: copied {n} file(s)", flush=True)
+            copied += n
         return copied
 
     def push(self, *, paths: list[str] | tuple[str, ...] | None = None) -> int:
@@ -117,7 +130,15 @@ class DriveDataSync:
         dest_root = self.remote_root()
         copied = 0
         for path_name in selected:
-            copied += _copy_tree(self.local_dir / path_name, dest_root / path_name)
+            print(f"[push] {path_name} ...", flush=True)
+            n = _copy_tree(
+                self.local_dir / path_name,
+                dest_root / path_name,
+                label=path_name,
+                progress=True,
+            )
+            print(f"[push] {path_name}: copied {n} file(s)", flush=True)
+            copied += n
         return copied
 
     def upload_file(self, local_path: Path, *, dest_relative: str) -> None:
@@ -150,21 +171,36 @@ class DriveDataSync:
         return copied
 
 
-def _copy_tree(source: Path, destination: Path) -> int:
+def _copy_tree(
+    source: Path,
+    destination: Path,
+    *,
+    label: str = "",
+    progress: bool = False,
+    progress_every: int = 500,
+) -> int:
     if not source.exists():
+        if progress:
+            print(f"  skip (missing): {source}", flush=True)
         return 0
-    copied = 0
     if source.is_file():
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         return 1
 
-    for src in source.rglob("*"):
-        if not src.is_file():
-            continue
+    files = [p for p in source.rglob("*") if p.is_file()]
+    total = len(files)
+    name = label or source.name
+    if progress:
+        print(f"  scanning {name}: {total} file(s)", flush=True)
+    copied = 0
+    for src in files:
         rel = src.relative_to(source)
         dest = destination / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
         copied += 1
+        if progress and (copied % progress_every == 0 or copied == total):
+            pct = (100.0 * copied / total) if total else 100.0
+            print(f"  {name}: {copied}/{total} ({pct:.1f}%)", flush=True)
     return copied

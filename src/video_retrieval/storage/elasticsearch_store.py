@@ -62,34 +62,77 @@ class ElasticsearchStore:
         self.client.bulk(operations=operations, refresh=True)
         return len(documents)
 
-    def bulk_import_ndjson(self, path: Path) -> int:
-        """Import an Elasticsearch bulk-export ndjson file into this store's index."""
+    def bulk_import_ndjson(
+        self,
+        path: Path,
+        *,
+        batch_size: int = 1000,
+        progress: bool = False,
+    ) -> int:
+        """Import an Elasticsearch ndjson export into this store's index.
+
+        Supports:
+        - classic bulk pairs: ``{"index":{...}}`` + source line
+        - compact export lines: ``{"_id": "...", "_source": {...}}``
+        """
         self.ensure_index()
-        operations: list[dict[str, Any]] = []
-        imported = 0
+        if progress:
+            print(f"[es] reading {path} ...", flush=True)
         with path.open(encoding="utf-8") as handle:
             lines = [line.strip() for line in handle if line.strip()]
+        if progress:
+            print(f"[es] {len(lines)} line(s) in {path.name}", flush=True)
+
+        operations: list[dict[str, Any]] = []
+        imported = 0
         index = 0
+
+        def flush() -> None:
+            nonlocal operations
+            if not operations:
+                return
+            self.client.bulk(operations=operations, refresh=False)
+            operations = []
+
         while index < len(lines):
-            meta = json.loads(lines[index])
-            action = meta.get("index") or meta.get("create")
-            if not action:
+            row = json.loads(lines[index])
+            if "_source" in row:
+                doc_id = row.get("_id")
+                source = row["_source"]
+                operations.append(
+                    {"index": {"_index": self.index, **({"_id": doc_id} if doc_id else {})}}
+                )
+                operations.append(source)
+                imported += 1
                 index += 1
-                continue
-            index += 1
-            if index >= len(lines):
-                break
-            source = json.loads(lines[index])
-            doc_id = action.get("_id")
-            operations.append(
-                {"index": {"_index": self.index, **({"_id": doc_id} if doc_id else {})}}
-            )
-            operations.append(source)
-            imported += 1
-            index += 1
-        if operations:
-            self.client.bulk(operations=operations, refresh=True)
+            else:
+                action = row.get("index") or row.get("create")
+                if not action:
+                    index += 1
+                    continue
+                index += 1
+                if index >= len(lines):
+                    break
+                source = json.loads(lines[index])
+                doc_id = action.get("_id")
+                operations.append(
+                    {"index": {"_index": self.index, **({"_id": doc_id} if doc_id else {})}}
+                )
+                operations.append(source)
+                imported += 1
+                index += 1
+
+            if len(operations) >= batch_size * 2:
+                flush()
+                if progress:
+                    print(f"[es] imported {imported} doc(s)...", flush=True)
+
+        flush()
+        if imported:
+            self.client.indices.refresh(index=self.index)
         logger.info("Imported %s text document(s) from %s", imported, path.name)
+        if progress:
+            print(f"[es] done: imported {imported} doc(s) from {path.name}", flush=True)
         return imported
 
     def import_from_manifests(self, manifests_dir: Path) -> int:

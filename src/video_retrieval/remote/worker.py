@@ -53,8 +53,11 @@ def _dispatch(request: RemoteJobRequest) -> dict[str, Any]:
             mount_drive=True,
         )
         pull_paths = request.pull_paths or list(SESSION_PULL_PATHS)
+        print(f"[session_pull] paths={pull_paths}", flush=True)
         pulled = sync.pull(paths=pull_paths)
-        es_result = hydrate_elasticsearch_index(settings)
+        print(f"[session_pull] drive copy done ({pulled} files)", flush=True)
+        es_result = hydrate_elasticsearch_index(settings, progress=True)
+        print(f"[session_pull] elasticsearch={es_result}", flush=True)
         return {"pulled": pulled, "paths": pull_paths, "elasticsearch": es_result}
 
     runtime = _runtime_for(settings)
