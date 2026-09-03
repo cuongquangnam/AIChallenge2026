@@ -34,10 +34,10 @@ def prepare_colab_data(
 
 
 def extract_keyframes_zip(keyframes_dir: Path, *, progress: bool = False) -> dict[str, object]:
-    """Extract ``keyframes.zip`` (or a single ``*.zip``) into ``keyframes_dir``."""
+    """Extract keyframe zip archive(s) into ``keyframes_dir``."""
     keyframes_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = _find_keyframes_zip(keyframes_dir)
-    if zip_path is None:
+    zip_paths = _find_keyframes_zips(keyframes_dir)
+    if not zip_paths:
         video_dirs = _video_subdirs(keyframes_dir)
         if video_dirs:
             return {
@@ -48,33 +48,39 @@ def extract_keyframes_zip(keyframes_dir: Path, *, progress: bool = False) -> dic
         return {"action": "skip", "reason": "no_zip"}
 
     video_dirs = _video_subdirs(keyframes_dir)
-    if video_dirs and not _zip_is_newer(zip_path, keyframes_dir):
+    if video_dirs and not any(_zip_is_newer(zip_path, keyframes_dir) for zip_path in zip_paths):
         return {
             "action": "skip",
             "reason": "already_extracted",
             "video_dirs": len(video_dirs),
-            "zip": zip_path.name,
+            "zips": [path.name for path in zip_paths],
         }
 
-    if progress:
-        print(f"[keyframes] extracting {zip_path.name} -> {keyframes_dir} ...", flush=True)
-
-    with zipfile.ZipFile(zip_path) as archive:
-        members = archive.namelist()
-        archive.extractall(keyframes_dir)
+    total_members = 0
+    for idx, zip_path in enumerate(zip_paths, start=1):
+        if progress:
+            print(
+                f"[keyframes] extracting {idx}/{len(zip_paths)} {zip_path.name} "
+                f"-> {keyframes_dir} ...",
+                flush=True,
+            )
+        with zipfile.ZipFile(zip_path) as archive:
+            members = archive.namelist()
+            total_members += len(members)
+            archive.extractall(keyframes_dir)
 
     _flatten_nested_keyframes_dir(keyframes_dir)
     video_dirs = _video_subdirs(keyframes_dir)
     if progress:
         print(
-            f"[keyframes] extracted {len(members)} member(s); "
+            f"[keyframes] extracted {total_members} member(s); "
             f"{len(video_dirs)} video folder(s)",
             flush=True,
         )
     return {
         "action": "extracted",
-        "zip": zip_path.name,
-        "members": len(members),
+        "zips": [path.name for path in zip_paths],
+        "members": total_members,
         "video_dirs": len(video_dirs),
     }
 
@@ -143,14 +149,13 @@ def prepare_colab_qdrant(
     }, DEFAULT_QDRANT_URL
 
 
-def _find_keyframes_zip(keyframes_dir: Path) -> Path | None:
+def _find_keyframes_zips(keyframes_dir: Path) -> list[Path]:
     preferred = keyframes_dir / "keyframes.zip"
     if preferred.is_file():
-        return preferred
+        others = sorted(path for path in keyframes_dir.glob("*.zip") if path != preferred)
+        return [preferred, *others]
     zips = sorted(keyframes_dir.glob("*.zip"))
-    if len(zips) == 1:
-        return zips[0]
-    return None
+    return zips
 
 
 def _video_subdirs(keyframes_dir: Path) -> list[Path]:

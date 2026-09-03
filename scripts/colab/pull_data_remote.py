@@ -5,7 +5,7 @@ Shows live progress. Skips pip install. Resumes by skipping files already copied
 
 Usage (on the VM, Drive already mounted):
   python3 /content/video-retrieval/scripts/colab/pull_data_remote.py
-  python3 .../pull_data_remote.py --skip-keyframes
+  python3 .../pull_data_remote.py --with-keyframes
   python3 .../pull_data_remote.py --only manifests,elasticsearch
 """
 from __future__ import annotations
@@ -21,9 +21,14 @@ REMOTE_DATA_DIR = Path("/content/data")
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--with-keyframes",
+        action="store_true",
+        help="Also pull keyframes zip archive(s) from Drive and extract them on the VM.",
+    )
+    parser.add_argument(
         "--skip-keyframes",
         action="store_true",
-        help="Do not pull keyframes/ (Drive FUSE is slow for many small files).",
+        help="Deprecated; keyframes are skipped by default.",
     )
     parser.add_argument(
         "--only",
@@ -55,6 +60,8 @@ def main() -> None:
     paths = list(SESSION_PULL_PATHS)
     if args.only.strip():
         paths = [p.strip() for p in args.only.split(",") if p.strip()]
+    elif args.with_keyframes and "keyframes" not in paths:
+        paths.append("keyframes")
     if args.skip_keyframes:
         paths = [p for p in paths if p != "keyframes"]
 
@@ -81,8 +88,8 @@ def main() -> None:
     print(response.result, flush=True)
     if "keyframes" not in paths:
         print(
-            "Note: keyframes were skipped. Search still works; "
-            "rerank/UI thumbs may need a later keyframe pull.",
+            "Note: keyframes were skipped by default. Search still works; "
+            "rerank/QA image-heavy paths may need --with-keyframes later.",
             flush=True,
         )
 

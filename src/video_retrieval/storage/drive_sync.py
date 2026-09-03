@@ -262,14 +262,26 @@ def _copy_tree(
 
 
 def _copy_keyframes(source: Path, destination: Path, *, progress: bool) -> int:
-    """Copy keyframes from Drive, preferring a zip archive over many loose files."""
-    zip_path = source / "keyframes.zip"
-    if zip_path.is_file():
+    """Copy keyframes from Drive, preferring zip archives over many loose files."""
+    zip_paths = sorted(source.glob("*.zip")) if source.is_dir() else []
+    if zip_paths:
         if progress:
-            print(f"  found {zip_path.name}; copying archive instead of loose keyframes", flush=True)
+            names = ", ".join(path.name for path in zip_paths[:5])
+            suffix = " ..." if len(zip_paths) > 5 else ""
+            print(
+                f"  found {len(zip_paths)} zip archive(s) ({names}{suffix}); "
+                "copying archives instead of loose keyframes",
+                flush=True,
+            )
         destination.mkdir(parents=True, exist_ok=True)
-        _copy_file(zip_path, destination / zip_path.name, timeout_sec=60.0)
-        return 1
+        copied = 0
+        for zip_path in zip_paths:
+            dest = destination / zip_path.name
+            if dest.is_file() and dest.stat().st_size == zip_path.stat().st_size:
+                continue
+            _copy_file(zip_path, dest, timeout_sec=300.0)
+            copied += 1
+        return copied
     return _copy_tree(source, destination, label="keyframes", progress=progress)
 
 

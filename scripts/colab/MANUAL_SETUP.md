@@ -104,7 +104,8 @@ My Drive/video-retrieval/
 ├── qdrant/
 │   └── video_keyframes_transnet.snapshot   # Qdrant collection snapshot
 ├── keyframes/
-│   └── keyframes.zip                 # extracted automatically on the VM
+│   └── keyframes.zip                 # or keyframes_000.zip, keyframes_001.zip, ...
+│                                     # zip archives are extracted automatically on the VM
 ├── manifests/                        # optional fallback for ES + QA metadata
 └── videos/                           # optional; QA pulls lazily on demand
 ```
@@ -122,6 +123,22 @@ After changing `.env`, re-upload env and re-run bootstrap:
 ./scripts/colab/laptop_upload_env.sh
 ./scripts/colab/laptop_bootstrap.sh
 # or full: ./scripts/colab/laptop_setup_all.sh
+```
+
+Default bootstrap pulls only the smaller index artifacts:
+
+```text
+elasticsearch/
+qdrant/
+manifests/
+```
+
+Keyframes stay on Drive by default. If you later need the full keyframe archive(s)
+on the VM for image-heavy reranking/debugging, run on the VM:
+
+```bash
+cd /content/video-retrieval
+python3 scripts/colab/pull_data_remote.py --with-keyframes
 ```
 
 ## Troubleshooting
