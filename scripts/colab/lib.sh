@@ -17,6 +17,45 @@ colab_session_active() {
   return 0
 }
 
+# Check a directory exists on the Colab VM without sys.exit(0).
+# IPython prints "An exception has occurred" for SystemExit(0) even on success.
+colab_remote_dir_exists() {
+  local cli="$1"
+  local session="$2"
+  local remote_dir="$3"
+  local output=""
+  local snippet
+
+  snippet=$(python3 - "$remote_dir" <<'PY'
+import json, sys
+path = sys.argv[1]
+print(
+    "from pathlib import Path\n"
+    f"p = Path({json.dumps(path)})\n"
+    "print('COLAB_PATH_OK' if p.is_dir() else 'COLAB_PATH_MISSING')\n"
+)
+PY
+)
+  output=$(printf '%s\n' "$snippet" | "$cli" exec -s "$session" --timeout 30 2>&1) || true
+  printf '%s\n' "$output"
+  printf '%s\n' "$output" | grep -q "COLAB_PATH_OK"
+}
+
+# Mount Google Drive on the Colab VM via CLI (works without notebook UI).
+# drive.mount() inside raw python/console cannot auth — use this instead.
+colab_ensure_drive_mounted() {
+  local cli="${1:-colab}"
+  local session="${2:-video-retrieval}"
+  local mount_path="${3:-/content/drive}"
+
+  echo "Mounting Google Drive at $mount_path (colab drivemount)..."
+  if ! "$cli" drivemount -s "$session" "$mount_path"; then
+    echo "Drive mount failed. Try again, or open the notebook UI:" >&2
+    echo "  colab url -s $session --open" >&2
+    return 1
+  fi
+}
+
 # Read KEY=VALUE from repo .env (comments/blank lines ignored). Does not export secrets
 # unless the caller assigns the returned value.
 dotenv_get() {

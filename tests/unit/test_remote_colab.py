@@ -58,11 +58,13 @@ def test_ensure_session_auto_manage_pulls_once(tmp_path: Path) -> None:
 
   with (
     patch.object(runner, "_session_running", return_value=True),
+    patch.object(runner, "_ensure_drive_mounted") as mount_mock,
     patch.object(runner, "_pull_session_data") as pull_mock,
   ):
     runner.ensure_session()
     runner.ensure_session()
 
+  mount_mock.assert_not_called()  # only called from _pull_session_data
   pull_mock.assert_called_once()
 
 
@@ -95,6 +97,7 @@ def test_colab_runner_search_invokes_exec(tmp_path: Path) -> None:
     drive_data_path="MyDrive/video-retrieval",
     remote_compute="colab",
     colab_session="video-retrieval",
+    colab_worker_mode="oneshot",
   )
   runner = ColabRunner(settings)
   response_json = json.dumps(
@@ -123,6 +126,37 @@ def test_colab_runner_search_invokes_exec(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_colab_runner_prefers_http_worker_in_auto_mode(tmp_path: Path) -> None:
+  settings = Settings(
+    data_dir=tmp_path / "data",
+    drive_data_path="MyDrive/video-retrieval",
+    remote_compute="colab",
+    colab_worker_mode="auto",
+    colab_worker_port=8765,
+  )
+  runner = ColabRunner(settings)
+  response_json = json.dumps({"ok": True, "result": {"hits": []}})
+
+  with (
+    patch.object(runner, "ensure_session"),
+    patch.object(
+      runner,
+      "_colab",
+      side_effect=[
+        SimpleNamespace(returncode=0, stdout="", stderr=""),
+        SimpleNamespace(returncode=0, stdout=response_json, stderr=""),
+      ],
+    ),
+  ):
+    result = runner.search("hello")
+
+  assert result == {"hits": []}
+  script = runner._http_proxy_script("/content/request.json")
+  assert "http://127.0.0.1:8765" in script
+  assert '"/job"' in script or "/job" in script
+
+
+@pytest.mark.unit
 def test_run_request_search_uses_elasticsearch(settings, tmp_path: Path) -> None:
   import sys
   from unittest.mock import MagicMock, patch
@@ -132,6 +166,7 @@ def test_run_request_search_uses_elasticsearch(settings, tmp_path: Path) -> None
   sys.modules.setdefault("google.genai", google_genai)
 
   from video_retrieval.models import SearchHit, SearchResponse
+  from video_retrieval.remote import worker as worker_mod
   from video_retrieval.remote.worker import run_request
 
   data_dir = tmp_path / "remote-data"
@@ -158,14 +193,20 @@ def test_run_request_search_uses_elasticsearch(settings, tmp_path: Path) -> None
 
   mock_service = MagicMock()
   mock_service.search_asr.return_value = mock_response
-  with patch("video_retrieval.search.service.SearchService", return_value=mock_service):
+  mock_runtime = MagicMock()
+  mock_runtime.settings = Settings(data_dir=data_dir)
+  mock_runtime.search = mock_service
+  worker_mod._RUNTIME = None
+  worker_mod._RUNTIME_KEY = None
+  with patch("video_retrieval.remote.worker.warm_runtime", return_value=mock_runtime):
     response = run_request(request)
 
   assert response.ok is True
   assert response.result is not None
   assert response.result["mode"] == "asr"
   mock_service.search_asr.assert_called_once()
-
+  worker_mod._RUNTIME = None
+  worker_mod._RUNTIME_KEY = None
 
 @pytest.mark.unit
 def test_run_request_session_pull(tmp_path: Path) -> None:
@@ -238,6 +279,10 @@ def test_remote_compute_gateway_requires_colab_mode(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_remote_compute_gateway_rejects_without_colab_mode(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path / "data", drive_data_path="MyDrive/video-retrieval")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        drive_data_path="MyDrive/video-retrieval",
+        remote_compute="",
+    )
     with pytest.raises(ValueError, match="REMOTE_COMPUTE"):
         RemoteComputeGateway(settings)

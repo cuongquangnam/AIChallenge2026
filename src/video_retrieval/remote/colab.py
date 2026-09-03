@@ -103,7 +103,28 @@ class ColabRunner:
             self._pull_session_data()
             self._session_data_pulled = True
 
+    def _ensure_drive_mounted(self) -> None:
+        """Mount Drive via Colab CLI (works without notebook UI auth popup)."""
+        mount = self.settings.drive_mount or "/content/drive"
+        logger.info("Ensuring Google Drive is mounted at %s via colab drivemount", mount)
+        completed = self._colab(
+            "drivemount",
+            "-s",
+            self.settings.colab_session,
+            mount,
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise RuntimeError(
+                f"colab drivemount failed for {mount}. "
+                f"Run: colab drivemount -s {self.settings.colab_session} {mount}\n"
+                f"{detail}"
+            )
+
     def _pull_session_data(self) -> None:
+        self._ensure_drive_mounted()
         request = self._base_request(
             job="session_pull",
             pull_paths=list(SESSION_PULL_PATHS),
@@ -155,14 +176,38 @@ class ColabRunner:
                 str(request_path),
                 remote_request,
             )
-            payload = self._colab_exec_worker(remote_request)
+            mode = self.settings.colab_worker_mode.strip().lower() or "auto"
+            if mode in {"auto", "persistent"}:
+                try:
+                    payload = self._colab_exec_worker(
+                        remote_request,
+                        via_http=True,
+                    )
+                except Exception as exc:
+                    if mode == "persistent":
+                        raise RuntimeError(
+                            "Persistent Colab worker is required but unreachable. "
+                            "Run: ./scripts/colab/laptop_start_worker.sh\n"
+                            f"Detail: {exc}"
+                        ) from exc
+                    logger.warning(
+                        "Persistent worker unavailable (%s); falling back to oneshot exec",
+                        exc,
+                    )
+                    payload = self._colab_exec_worker(remote_request, via_http=False)
+            else:
+                payload = self._colab_exec_worker(remote_request, via_http=False)
         response = RemoteJobResponse.model_validate_json(payload)
         if not response.ok:
             raise RuntimeError(response.error or "Remote Colab job failed")
         return response
 
-    def _colab_exec_worker(self, remote_request_path: str) -> str:
-        script = self._worker_script(remote_request_path)
+    def _colab_exec_worker(self, remote_request_path: str, *, via_http: bool) -> str:
+        script = (
+            self._http_proxy_script(remote_request_path)
+            if via_http
+            else self._oneshot_worker_script(remote_request_path)
+        )
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as handle:
             handle.write(script)
             script_path = handle.name
@@ -183,7 +228,38 @@ class ColabRunner:
             raise RuntimeError(detail)
         return _extract_json_payload(completed.stdout)
 
-    def _worker_script(self, remote_request_path: str) -> str:
+    def _http_proxy_script(self, remote_request_path: str) -> str:
+        worker_url = self.settings.colab_worker_url.rstrip("/")
+        timeout = int(self.settings.colab_timeout_sec)
+        return textwrap.dedent(
+            f"""
+            import json
+            import urllib.error
+            import urllib.request
+
+            worker_url = {worker_url!r} + "/job"
+            with open({remote_request_path!r}, encoding="utf-8") as handle:
+                request = json.load(handle)
+            data = json.dumps(request).encode("utf-8")
+            req = urllib.request.Request(
+                worker_url,
+                data=data,
+                headers={{"Content-Type": "application/json"}},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout={timeout}) as resp:
+                    print(resp.read().decode("utf-8"))
+            except urllib.error.URLError as exc:
+                raise SystemExit(
+                    "Persistent worker not reachable at "
+                    f"{{worker_url}}. Start it with ./scripts/colab/laptop_start_worker.sh "
+                    f"({{exc}})"
+                ) from exc
+            """
+        ).strip() + "\n"
+
+    def _oneshot_worker_script(self, remote_request_path: str) -> str:
         return textwrap.dedent(
             f"""
             import json
@@ -197,6 +273,10 @@ class ColabRunner:
                 raise SystemExit(1)
             """
         ).strip() + "\n"
+
+    # Back-compat alias used by older tests / callers.
+    def _worker_script(self, remote_request_path: str) -> str:
+        return self._oneshot_worker_script(remote_request_path)
 
     def _bootstrap_remote(self) -> None:
         repo_root = _project_root()

@@ -38,8 +38,7 @@ if ! colab_exec_script "$CLI" "$SESSION" "$TIMEOUT" "$ROOT/scripts/colab/clone_r
   echo "Clone failed."
   exit 1
 fi
-if ! printf 'import os, sys\nsys.exit(0 if os.path.isdir("/content/video-retrieval/.git") else 1)\n' \
-  | "$CLI" exec -s "$SESSION" --timeout 30; then
+if ! colab_remote_dir_exists "$CLI" "$SESSION" "/content/video-retrieval/.git"; then
   echo "Clone did not create /content/video-retrieval/.git — check repo URL/branch and retry."
   exit 1
 fi

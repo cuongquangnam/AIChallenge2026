@@ -30,8 +30,7 @@ trap 'rm -f "$tmp_env"' EXIT
 python3 "$SCRIPTS/build_vm_env.py" "$DOTENV" "$tmp_env"
 
 echo "Uploading .env (Colab vars) to CLI VM..."
-if printf 'import os, sys\nsys.exit(0 if os.path.isdir("/content/video-retrieval") else 1)\n' \
-  | "$CLI" exec -s "$SESSION" --timeout 30; then
+if colab_remote_dir_exists "$CLI" "$SESSION" "/content/video-retrieval"; then
   colab_write_remote_file "$CLI" "$SESSION" "$REMOTE_ENV" "$tmp_env"
 else
   echo "Repo not cloned yet — writing $REMOTE_ENV_FALLBACK (run laptop_clone.sh or laptop_setup_all.sh)."

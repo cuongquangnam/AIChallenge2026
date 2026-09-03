@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 REPO_ROOT = Path("/content/video-retrieval")
-DEFAULT_BRANCH = "main"
+DEFAULT_BRANCH = "cuong/use-colab"
 
 
 def _secret(name: str) -> str:
@@ -50,7 +50,24 @@ def _auth_repo_url(url: str) -> str:
 
 
 def _run_git(*args: str, cwd: Path | None = None) -> None:
-    subprocess.check_call(["git", *args], cwd=cwd or REPO_ROOT)
+    if cwd is not None:
+        workdir = cwd
+    elif REPO_ROOT.is_dir():
+        workdir = REPO_ROOT
+    else:
+        workdir = None
+    subprocess.check_call(["git", *args], cwd=workdir)
+
+
+def _current_branch() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=REPO_ROOT,
+            text=True,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return ""
 
 
 def clone_or_update(*, repo_url: str, branch: str) -> None:
@@ -63,16 +80,31 @@ def clone_or_update(*, repo_url: str, branch: str) -> None:
 
     if REPO_ROOT.is_dir() and (REPO_ROOT / ".git").is_dir():
         print(f"Updating existing repo at {REPO_ROOT}...")
-        _run_git("fetch", "--all", "--prune")
-        _run_git("checkout", branch)
-        _run_git("pull", "--ff-only", "origin", branch)
+        # Shallow clones only have the original branch; fetch the target explicitly.
+        _run_git("remote", "set-url", "origin", repo_url)
+        _run_git("fetch", "--depth", "1", "origin", branch)
+        if _current_branch() != branch:
+            _run_git("checkout", "-B", branch, f"origin/{branch}")
+        else:
+            _run_git("reset", "--hard", f"origin/{branch}")
         return
 
     if REPO_ROOT.exists():
         raise SystemExit(f"{REPO_ROOT} exists but is not a git repo. Remove it first.")
 
     print(f"Cloning {repo_url} -> {REPO_ROOT} (branch={branch})...")
-    _run_git("clone", "--branch", branch, "--depth", "1", repo_url, str(REPO_ROOT))
+    parent = REPO_ROOT.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    _run_git(
+        "clone",
+        "--branch",
+        branch,
+        "--depth",
+        "1",
+        repo_url,
+        REPO_ROOT.name,
+        cwd=parent,
+    )
 
 
 def main() -> None:

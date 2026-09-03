@@ -5,11 +5,30 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from video_retrieval.config import get_settings
+from video_retrieval.config import Settings, get_settings
 from video_retrieval.remote.models import RemoteJobRequest, RemoteJobResponse
+from video_retrieval.runtime import AppRuntime, build_task_runtime
 from video_retrieval.storage.data_sync import create_data_sync
 from video_retrieval.storage.elasticsearch_hydrate import hydrate_elasticsearch_index
 from video_retrieval.storage.sync_paths import SESSION_PULL_PATHS
+
+_RUNTIME: AppRuntime | None = None
+_RUNTIME_KEY: tuple[str, str] | None = None
+
+
+def warm_runtime(settings: Settings) -> AppRuntime:
+    """Load models once for the persistent Colab worker process."""
+    global _RUNTIME, _RUNTIME_KEY
+    key = (str(settings.data_dir), settings.qdrant_collection)
+    if _RUNTIME is not None and _RUNTIME_KEY == key:
+        return _RUNTIME
+    _RUNTIME = build_task_runtime(settings)
+    _RUNTIME_KEY = key
+    return _RUNTIME
+
+
+def get_cached_runtime() -> AppRuntime | None:
+    return _RUNTIME
 
 
 def run_request(request: RemoteJobRequest | dict[str, Any]) -> RemoteJobResponse:
@@ -38,10 +57,11 @@ def _dispatch(request: RemoteJobRequest) -> dict[str, Any]:
         es_result = hydrate_elasticsearch_index(settings)
         return {"pulled": pulled, "paths": pull_paths, "elasticsearch": es_result}
 
-    if request.job == "search":
-        from video_retrieval.search.service import SearchService
+    runtime = _runtime_for(settings)
 
-        service = SearchService(settings)
+    if request.job == "search":
+        service = runtime.search
+        assert service is not None
         if request.mode == "ocr":
             response = service.search_ocr(request.query or "", limit=request.limit)
         elif request.mode == "asr":
@@ -61,9 +81,7 @@ def _dispatch(request: RemoteJobRequest) -> dict[str, Any]:
         return response.model_dump(mode="json")
 
     if request.job == "kis":
-        from video_retrieval.runtime import build_task_runtime
-
-        runtime = build_task_runtime(settings)
+        assert runtime.kis is not None
         result = runtime.kis.run(
             request.query or "",
             limit=request.limit,
@@ -72,9 +90,7 @@ def _dispatch(request: RemoteJobRequest) -> dict[str, Any]:
         return result.model_dump(mode="json")
 
     if request.job == "qa":
-        from video_retrieval.runtime import build_task_runtime
-
-        runtime = build_task_runtime(settings)
+        assert runtime.qa is not None
         result = runtime.qa.answer(
             request.query or "",
             limit=request.limit,
@@ -83,9 +99,7 @@ def _dispatch(request: RemoteJobRequest) -> dict[str, Any]:
         return result.model_dump(mode="json")
 
     if request.job == "trake":
-        from video_retrieval.runtime import build_task_runtime
-
-        runtime = build_task_runtime(settings)
+        assert runtime.trake is not None
         result = runtime.trake.run(
             request.query or "",
             top_chains=request.top_chains,
@@ -93,6 +107,14 @@ def _dispatch(request: RemoteJobRequest) -> dict[str, Any]:
         return result.model_dump(mode="json")
 
     raise ValueError(f"Unsupported remote job: {request.job}")
+
+
+def _runtime_for(settings: Settings) -> AppRuntime:
+    """Reuse a warmed process runtime when present; otherwise build once for this process."""
+    cached = get_cached_runtime()
+    if cached is not None and str(cached.settings.data_dir) == str(settings.data_dir):
+        return cached
+    return warm_runtime(settings)
 
 
 def _settings_from_request(request: RemoteJobRequest):

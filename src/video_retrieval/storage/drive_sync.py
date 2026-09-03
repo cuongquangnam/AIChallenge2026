@@ -10,12 +10,38 @@ logger = logging.getLogger(__name__)
 
 
 def mount_google_drive(mount_point: str | Path = "/content/drive", *, force_remount: bool = False) -> Path:
-    """Mount Google Drive on a Colab VM (no-op if already mounted)."""
+    """Mount Google Drive on a Colab VM (no-op if already mounted).
+
+    ``google.colab.drive.mount`` only works inside the notebook UI (needs a kernel
+    for the auth popup). From laptop scripts / ``colab exec`` / console, mount
+    first with::
+
+        colab drivemount -s <session> /content/drive
+    """
     mount = Path(mount_point)
     my_drive = mount / "MyDrive"
     if my_drive.is_dir() and not force_remount:
         logger.info("Google Drive already mounted at %s", mount)
         return mount
+
+    has_kernel = False
+    try:
+        from IPython import get_ipython
+
+        ipy = get_ipython()
+        has_kernel = ipy is not None and getattr(ipy, "kernel", None) is not None
+    except Exception:  # noqa: BLE001
+        has_kernel = False
+
+    if not has_kernel:
+        raise RuntimeError(
+            f"Google Drive is not mounted at {mount} (missing {my_drive}). "
+            "drive.mount() cannot authenticate outside the Colab notebook UI. "
+            "From your laptop run:\n"
+            f"  colab drivemount -s video-retrieval {mount}\n"
+            "or: ./scripts/colab/laptop_drivemount.sh\n"
+            "Then re-run bootstrap."
+        )
 
     try:
         from google.colab import drive
@@ -27,6 +53,12 @@ def mount_google_drive(mount_point: str | Path = "/content/drive", *, force_remo
 
     logger.info("Mounting Google Drive at %s", mount)
     drive.mount(str(mount), force_remount=force_remount)
+    if not my_drive.is_dir():
+        raise RuntimeError(
+            f"drive.mount completed but {my_drive} is missing. "
+            "Re-auth in the Colab UI or run: colab drivemount -s <session> "
+            f"{mount}"
+        )
     return mount
 
 

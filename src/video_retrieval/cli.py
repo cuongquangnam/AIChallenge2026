@@ -263,6 +263,33 @@ def colab_session_cmd(data_dir: Optional[Path] = _data_dir_option()) -> None:
         print("Manual mode: ensure you ran scripts/colab/laptop_bootstrap.sh on Colab first.")
 
 
+@colab_app.command("worker-start")
+def colab_worker_start_cmd() -> None:
+    """Start the persistent Colab worker (models loaded once on the VM)."""
+    import subprocess
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "colab" / "laptop_start_worker.sh"
+    raise SystemExit(subprocess.call([str(script)]))
+
+
+@colab_app.command("worker-stop")
+def colab_worker_stop_cmd() -> None:
+    """Stop the persistent Colab worker."""
+    import subprocess
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "colab" / "laptop_stop_worker.sh"
+    raise SystemExit(subprocess.call([str(script)]))
+
+
+@colab_app.command("worker-status")
+def colab_worker_status_cmd() -> None:
+    """Show persistent Colab worker health/status."""
+    import subprocess
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "colab" / "laptop_worker_status.sh"
+    raise SystemExit(subprocess.call([str(script)]))
+
+
 @colab_app.command("pull")
 def colab_pull_cmd(
     data_dir: Optional[Path] = _data_dir_option(),

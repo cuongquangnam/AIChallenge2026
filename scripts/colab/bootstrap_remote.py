@@ -34,6 +34,16 @@ def main() -> None:
     from video_retrieval.remote.worker import run_request
 
     settings = get_settings(data_dir=str(REMOTE_DATA_DIR), colab=True)
+    drive_root = Path(settings.drive_mount) / "MyDrive"
+    if not drive_root.is_dir():
+        raise SystemExit(
+            f"Google Drive not mounted ({drive_root} missing).\n"
+            "From your laptop (not inside colab console python) run:\n"
+            f"  colab drivemount -s video-retrieval {settings.drive_mount}\n"
+            "or: ./scripts/colab/laptop_drivemount.sh\n"
+            "Then re-run: ./scripts/colab/laptop_bootstrap.sh"
+        )
+
     request = {
         "job": "session_pull",
         "drive_mount": settings.drive_mount,

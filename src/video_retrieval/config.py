@@ -82,10 +82,21 @@ class Settings(BaseSettings):
     # When false (default), you start/bootstrap Colab manually (see scripts/colab/MANUAL_SETUP.md).
     colab_auto_manage: bool = False
     colab_env_file: str = "/content/video-retrieval/.env.colab"
+    # How laptop jobs talk to Colab:
+    #   auto        — prefer persistent worker HTTP; fall back to oneshot exec
+    #   persistent  — require long-running worker on the VM
+    #   oneshot     — legacy: load models inside each colab exec
+    colab_worker_mode: str = "auto"
+    colab_worker_port: int = 8765
+    colab_worker_ready_timeout_sec: float = 900.0
 
     @property
     def uses_remote_compute(self) -> bool:
         return self.remote_compute.strip().lower() == "colab"
+
+    @property
+    def colab_worker_url(self) -> str:
+        return f"http://127.0.0.1:{int(self.colab_worker_port)}"
 
     @property
     def qdrant_dir(self) -> Path:
