@@ -10,6 +10,7 @@ from video_retrieval.remote.models import RemoteJobRequest, RemoteJobResponse
 from video_retrieval.runtime import AppRuntime, build_task_runtime
 from video_retrieval.storage.data_sync import create_data_sync
 from video_retrieval.storage.elasticsearch_hydrate import hydrate_elasticsearch_index
+from video_retrieval.storage.post_pull import prepare_colab_data
 from video_retrieval.storage.sync_paths import SESSION_PULL_PATHS
 
 _RUNTIME: AppRuntime | None = None
@@ -19,7 +20,13 @@ _RUNTIME_KEY: tuple[str, str] | None = None
 def warm_runtime(settings: Settings) -> AppRuntime:
     """Load models once for the persistent Colab worker process."""
     global _RUNTIME, _RUNTIME_KEY
-    key = (str(settings.data_dir), settings.qdrant_collection)
+    if settings.colab_runtime:
+        from video_retrieval.storage.post_pull import prepare_colab_qdrant
+
+        _, qdrant_url = prepare_colab_qdrant(settings, progress=True)
+        if qdrant_url != settings.qdrant_url:
+            settings = settings.model_copy(update={"qdrant_url": qdrant_url})
+    key = (str(settings.data_dir), settings.qdrant_collection, settings.qdrant_url)
     if _RUNTIME is not None and _RUNTIME_KEY == key:
         return _RUNTIME
     _RUNTIME = build_task_runtime(settings)
@@ -56,9 +63,17 @@ def _dispatch(request: RemoteJobRequest) -> dict[str, Any]:
         print(f"[session_pull] paths={pull_paths}", flush=True)
         pulled = sync.pull(paths=pull_paths)
         print(f"[session_pull] drive copy done ({pulled} files)", flush=True)
+        settings, post_pull = prepare_colab_data(settings, progress=True)
+        print(f"[session_pull] post_pull={post_pull}", flush=True)
         es_result = hydrate_elasticsearch_index(settings, progress=True)
         print(f"[session_pull] elasticsearch={es_result}", flush=True)
-        return {"pulled": pulled, "paths": pull_paths, "elasticsearch": es_result}
+        return {
+            "pulled": pulled,
+            "paths": pull_paths,
+            "post_pull": post_pull,
+            "qdrant_url": settings.qdrant_url,
+            "elasticsearch": es_result,
+        }
 
     runtime = _runtime_for(settings)
 
@@ -132,6 +147,12 @@ def _settings_from_request(request: RemoteJobRequest):
     if request.settings_overrides:
         settings = settings.model_copy(update=request.settings_overrides)
     settings.ensure_dirs()
+    if settings.colab_runtime:
+        from video_retrieval.storage.qdrant_bootstrap import resolve_colab_qdrant_url
+
+        qdrant_url = resolve_colab_qdrant_url(settings)
+        if qdrant_url != settings.qdrant_url:
+            settings = settings.model_copy(update={"qdrant_url": qdrant_url})
     return settings
 
 

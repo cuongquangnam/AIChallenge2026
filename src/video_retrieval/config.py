@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     colab_timeout_sec: float = 600.0
     colab_remote_data_dir: str = "/content/data"
     colab_elasticsearch_install_dir: str = "/content/elasticsearch"
+    colab_qdrant_install_dir: str = "/content/qdrant"
     colab_runtime: bool = False
     # When false (default), you start/bootstrap Colab manually (see scripts/colab/MANUAL_SETUP.md).
     colab_auto_manage: bool = False
@@ -135,9 +136,8 @@ class Settings(BaseSettings):
         return self.model_copy(update={"data_dir": path.resolve()})
 
     def remote_settings_overrides(self) -> dict[str, object]:
-        """Settings applied on the Colab VM (file-backed Qdrant + local Elasticsearch)."""
+        """Settings applied on the Colab VM (Elasticsearch + resolved Qdrant URL)."""
         return {
-            "qdrant_url": "local",
             "elasticsearch_url": self.elasticsearch_url,
             "visual_backend": self.visual_backend,
             "ocr_backend": self.ocr_backend,
@@ -158,6 +158,7 @@ class Settings(BaseSettings):
             "drive_data_path": self.drive_data_path,
             "drive_local_path": self.drive_local_path,
             "colab_elasticsearch_install_dir": self.colab_elasticsearch_install_dir,
+            "colab_qdrant_install_dir": self.colab_qdrant_install_dir,
         }
 
 
@@ -178,7 +179,26 @@ def get_settings(
 
     settings = Settings(_env_file=env_file) if env_file else Settings()
     if colab:
-        settings = settings.model_copy(update={"qdrant_url": "local", "colab_runtime": True})
+        settings = settings.model_copy(update={"colab_runtime": True})
+        settings = _resolve_colab_qdrant_settings(settings, data_dir)
     if data_dir is not None:
         return settings.with_data_dir(data_dir)
     return settings
+
+
+def _resolve_colab_qdrant_settings(
+    settings: Settings,
+    data_dir: Path | str | None,
+) -> Settings:
+    """Use Qdrant HTTP server on Colab when Drive data includes ``.snapshot`` files."""
+    if data_dir is not None:
+        settings = settings.with_data_dir(data_dir)
+    try:
+        from video_retrieval.storage.qdrant_bootstrap import resolve_colab_qdrant_url
+
+        qdrant_url = resolve_colab_qdrant_url(settings)
+    except Exception:
+        return settings
+    if qdrant_url == settings.qdrant_url:
+        return settings
+    return settings.model_copy(update={"qdrant_url": qdrant_url})

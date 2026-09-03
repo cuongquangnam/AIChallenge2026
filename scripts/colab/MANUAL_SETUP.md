@@ -91,11 +91,29 @@ In `ps` on the VM you should see a long-running `uvicorn ...worker_server:app` p
 
 ```
 My Drive/video-retrieval/
-├── elasticsearch/video_text*.ndjson
+├── elasticsearch/
+│   └── video_text_transnet.ndjson    # bulk ES export (not an ES snapshot)
 ├── qdrant/
+│   └── video_keyframes_transnet.snapshot   # Qdrant collection snapshot
 ├── keyframes/
-├── manifests/
-└── videos/
+│   └── keyframes.zip                 # extracted automatically on the VM
+├── manifests/                        # optional fallback for ES + QA metadata
+└── videos/                           # optional; QA pulls lazily on demand
+```
+
+For **TransNet** data, set in your laptop `.env` before `laptop_upload_env.sh`:
+
+```env
+QDRANT_COLLECTION=video_keyframes_transnet
+ES_INDEX=video_text_transnet
+```
+
+After changing `.env`, re-upload env and re-run bootstrap:
+
+```bash
+./scripts/colab/laptop_upload_env.sh
+./scripts/colab/laptop_bootstrap.sh
+# or full: ./scripts/colab/laptop_setup_all.sh
 ```
 
 ## Troubleshooting

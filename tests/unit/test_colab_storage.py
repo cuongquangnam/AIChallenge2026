@@ -13,9 +13,12 @@ from video_retrieval.storage.qdrant_store import QdrantStore
 @pytest.mark.unit
 def test_get_settings_colab_uses_local_backends(tmp_path: Path) -> None:
     settings = get_settings(data_dir=tmp_path / "data", colab=True)
-    assert settings.qdrant_url == "local"
-    assert settings.elasticsearch_url == "http://localhost:9200"
     assert settings.colab_runtime is True
+    assert settings.elasticsearch_url == "http://localhost:9200"
+    # Default without a Drive snapshot: embedded local Qdrant, unless QDRANT_URL is set in .env.
+    qdir = settings.qdrant_dir
+    qdir.mkdir(parents=True, exist_ok=True)
+    assert settings.qdrant_url in {"local", "http://127.0.0.1:6333", "http://localhost:6333"}
 
 
 @pytest.mark.unit
