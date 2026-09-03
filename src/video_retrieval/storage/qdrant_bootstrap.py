@@ -141,9 +141,10 @@ def recover_qdrant_snapshot(
     collection: str,
     snapshot_path: Path,
     progress: bool = False,
+    timeout_sec: float = 3600.0,
 ) -> int:
     """Recover a collection from a local ``.snapshot`` file via the Qdrant HTTP API."""
-    client = QdrantClient(url=url)
+    client = QdrantClient(url=url, timeout=timeout_sec)
     if collection_has_points(client, collection):
         count = int(client.get_collection(collection).points_count or 0)
         if progress:
@@ -152,12 +153,51 @@ def recover_qdrant_snapshot(
 
     location = snapshot_path.resolve().as_uri()
     if progress:
-        print(f"[qdrant] recovering {snapshot_path.name} into {collection!r} ...", flush=True)
-    client.recover_snapshot(collection_name=collection, location=location, wait=True)
-    count = int(client.get_collection(collection).points_count or 0)
+        print(
+            f"[qdrant] recovering {snapshot_path.name} into {collection!r} "
+            f"(timeout={timeout_sec:.0f}s) ...",
+            flush=True,
+        )
+    client.recover_snapshot(
+        collection_name=collection,
+        location=location,
+        wait=True,
+        timeout=timeout_sec,
+    )
+    count = _wait_for_collection_points(
+        client,
+        collection,
+        timeout_sec=timeout_sec,
+        progress=progress,
+    )
     if progress:
         print(f"[qdrant] recovered {count} point(s)", flush=True)
     return count
+
+
+def _wait_for_collection_points(
+    client: QdrantClient,
+    collection: str,
+    *,
+    timeout_sec: float,
+    progress: bool,
+) -> int:
+    deadline = time.monotonic() + timeout_sec
+    last_print = 0.0
+    while time.monotonic() < deadline:
+        try:
+            info = client.get_collection(collection)
+            count = int(getattr(info, "points_count", 0) or 0)
+            if count > 0:
+                return count
+        except Exception:
+            pass
+        now = time.monotonic()
+        if progress and now - last_print >= 30.0:
+            print(f"[qdrant] waiting for collection {collection!r} to become readable ...", flush=True)
+            last_print = now
+        time.sleep(2.0)
+    raise RuntimeError(f"Timed out waiting for Qdrant collection {collection!r} after recovery")
 
 
 def _can_run_qdrant_binary() -> bool:
