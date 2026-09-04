@@ -200,6 +200,7 @@ class QAService(EventChainTaskBase):
                     self.settings,
                     video_id=chain.video_id,
                     keyframe_path=event.keyframe_path,
+                    source="qa",
                 )
                 if path is not None:
                     return path

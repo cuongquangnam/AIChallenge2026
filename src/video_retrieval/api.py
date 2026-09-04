@@ -260,6 +260,8 @@ def _safe_video_id(video_id: str) -> str:
 
 
 def _safe_keyframe_file(video_id: str, filename: str) -> Path:
+    from video_retrieval.storage.keyframe_paths import log_keyframe_access
+
     video_id = _safe_video_id(video_id)
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -270,7 +272,14 @@ def _safe_keyframe_file(video_id: str, filename: str) -> Path:
     if not path.is_relative_to(root):
         raise HTTPException(status_code=400, detail="Path escapes keyframe root")
     if not path.is_file():
+        log_keyframe_access(
+            source="ui",
+            video_id=video_id,
+            path=None,
+            keyframe_path=filename,
+        )
         raise HTTPException(status_code=404, detail="Keyframe not found")
+    log_keyframe_access(source="ui", video_id=video_id, path=path)
     return path
 
 

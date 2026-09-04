@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import zipfile
 from pathlib import Path
 
@@ -86,17 +87,26 @@ def extract_keyframes_zip(
         with zipfile.ZipFile(zip_path) as archive:
             members = [info for info in archive.infolist() if not info.is_dir()]
             total_members += len(members)
+            started = time.monotonic()
+            last_log = 0.0
             for member_idx, info in enumerate(members, start=1):
                 archive.extract(info, keyframes_dir)
-                if progress and (
-                    member_idx == 1
-                    or member_idx == len(members)
-                    or member_idx % 2000 == 0
-                ):
+                if not progress:
+                    continue
+                now = time.monotonic()
+                is_first = member_idx == 1
+                is_last = member_idx == len(members)
+                if is_first or is_last or (now - last_log) >= 5.0:
+                    elapsed = now - started
+                    rate = member_idx / elapsed if elapsed > 0 else 0.0
+                    pct = 100.0 * member_idx / len(members) if members else 100.0
                     print(
-                        f"[keyframes]   {zip_path.name}: {member_idx}/{len(members)} files",
+                        f"[keyframes]   {zip_path.name}: {member_idx}/{len(members)} "
+                        f"({pct:.1f}%) files  elapsed={elapsed:.0f}s  "
+                        f"~{rate:.0f} files/s",
                         flush=True,
                     )
+                    last_log = now
 
     _flatten_nested_keyframes_dir(keyframes_dir)
     video_dirs = _video_subdirs(keyframes_dir)

@@ -2,9 +2,54 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 
 from video_retrieval.config import Settings
+
+logger = logging.getLogger(__name__)
+
+_MIN_LOG_INTERVAL_SEC = 5.0
+_last_log_monotonic = 0.0
+_ok_since_log = 0
+_miss_since_log = 0
+_last_detail = ""
+
+
+def log_keyframe_access(
+    *,
+    source: str,
+    video_id: str,
+    path: Path | None,
+    keyframe_path: str | Path | None = None,
+    force: bool = False,
+) -> None:
+    """Throttle keyframe load logs to at least ``_MIN_LOG_INTERVAL_SEC`` apart."""
+    global _last_log_monotonic, _ok_since_log, _miss_since_log, _last_detail
+
+    if path is not None:
+        _ok_since_log += 1
+        _last_detail = f"{source} ok video_id={video_id} path={path}"
+    else:
+        _miss_since_log += 1
+        _last_detail = (
+            f"{source} miss video_id={video_id} keyframe_path={keyframe_path!s}"
+        )
+
+    now = time.monotonic()
+    if not force and (now - _last_log_monotonic) < _MIN_LOG_INTERVAL_SEC:
+        return
+
+    message = (
+        f"[keyframes] load ok={_ok_since_log} miss={_miss_since_log} "
+        f"since last log; {_last_detail}"
+    )
+    logger.info(message)
+    print(message, flush=True)
+    _ok_since_log = 0
+    _miss_since_log = 0
+    _last_log_monotonic = now
 
 
 def resolve_keyframe_path(
@@ -12,6 +57,8 @@ def resolve_keyframe_path(
     *,
     video_id: str,
     keyframe_path: str | Path | None,
+    source: str = "resolve",
+    log: bool = True,
 ) -> Path | None:
     """Map an indexed ``keyframe_path`` to a file under ``DATA_DIR/keyframes``.
 
@@ -20,9 +67,18 @@ def resolve_keyframe_path(
     ``keyframes/{video_id}/{filename}``.
     """
     if not keyframe_path:
+        if log:
+            log_keyframe_access(
+                source=source,
+                video_id=video_id,
+                path=None,
+                keyframe_path=keyframe_path,
+            )
         return None
     raw = Path(str(keyframe_path))
     if raw.is_file():
+        if log:
+            log_keyframe_access(source=source, video_id=video_id, path=raw)
         return raw
 
     name = raw.name
@@ -53,5 +109,15 @@ def resolve_keyframe_path(
             continue
         seen.add(resolved)
         if resolved.is_file():
+            if log:
+                log_keyframe_access(source=source, video_id=video_id, path=resolved)
             return resolved
+
+    if log:
+        log_keyframe_access(
+            source=source,
+            video_id=video_id,
+            path=None,
+            keyframe_path=keyframe_path,
+        )
     return None

@@ -82,6 +82,7 @@ class CrossEncoderReranker:
                 self.settings,
                 video_id=video_id,
                 keyframe_path=hit.keyframe_path,
+                source="rerank",
             )
             if path is None:
                 continue
