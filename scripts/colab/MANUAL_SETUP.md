@@ -128,7 +128,7 @@ After bootstrap, start (or restart) the warm worker from the notebook cell, or:
 ```
 
 - Listens on the VM at `http://127.0.0.1:8765` (not exposed to the internet)
-- With tunnel mode, laptop POSTs to the Cloudflare URL; otherwise jobs use `colab exec` as a thin HTTP proxy
+- With tunnel mode, laptop submits via `POST /jobs` and polls `GET /jobs/{id}` (avoids Cloudflare ~100s cutoff); otherwise jobs use `colab exec` as a thin HTTP proxy
 - First start can take several minutes (model load); later searches reuse the process
 - Logs: `/content/video-retrieval/worker.log`
 

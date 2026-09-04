@@ -286,3 +286,58 @@ def test_remote_compute_gateway_rejects_without_colab_mode(tmp_path: Path) -> No
     )
     with pytest.raises(ValueError, match="REMOTE_COMPUTE"):
         RemoteComputeGateway(settings)
+
+
+@pytest.mark.unit
+def test_public_worker_submit_and_poll(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        drive_data_path="MyDrive/video-retrieval",
+        remote_compute="colab",
+        colab_worker_public_url="https://example.trycloudflare.com",
+        colab_job_poll_interval_sec=0.01,
+        colab_timeout_sec=5,
+    )
+    runner = ColabRunner(settings)
+    calls: list[str] = []
+
+    class _Resp:
+        def __init__(self, payload: dict, status: int = 200):
+            self.status = status
+            self._payload = json.dumps(payload).encode("utf-8")
+
+        def read(self) -> bytes:
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=None):  # noqa: ANN001
+        url = req.full_url if hasattr(req, "full_url") else req.get_full_url()
+        calls.append(f"{req.get_method()} {url}")
+        if url.endswith("/health"):
+            return _Resp({"ok": True})
+        if url.endswith("/jobs") and req.get_method() == "POST":
+            return _Resp({"job_id": "abc123", "status": "queued"})
+        if url.endswith("/jobs/abc123"):
+            if sum(1 for c in calls if "/jobs/abc123" in c) < 2:
+                return _Resp({"job_id": "abc123", "status": "running"})
+            return _Resp(
+                {
+                    "job_id": "abc123",
+                    "status": "done",
+                    "ok": True,
+                    "result": {"query": "q", "hits": []},
+                }
+            )
+        raise AssertionError(f"unexpected url {url}")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        result = runner.search("q", limit=3)
+
+    assert result["hits"] == []
+    assert any(c.startswith("POST ") and c.endswith("/jobs") for c in calls)
+    assert sum(1 for c in calls if c.endswith("/jobs/abc123")) >= 2

@@ -91,8 +91,10 @@ class Settings(BaseSettings):
     colab_worker_mode: str = "auto"
     colab_worker_port: int = 8765
     colab_worker_ready_timeout_sec: float = 900.0
+    # How often the laptop polls GET /jobs/{id} when using COLAB_WORKER_PUBLIC_URL.
+    colab_job_poll_interval_sec: float = 2.0
     # Public Cloudflare (or other) tunnel URL to the Colab worker, e.g. https://xxx.trycloudflare.com
-    # When set, laptop search/KIS/QA skip Colab CLI and call this URL directly.
+    # When set, laptop search/KIS/QA skip Colab CLI and call this URL directly (async submit+poll).
     colab_worker_public_url: str = ""
 
     @property

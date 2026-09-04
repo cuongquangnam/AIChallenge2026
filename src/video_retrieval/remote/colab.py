@@ -131,25 +131,79 @@ class ColabRunner:
         return self._exec_request(request)
 
     def _run_public_http(self, request: RemoteJobRequest) -> RemoteJobResponse:
+        """Submit via /jobs and poll /jobs/{id} so Cloudflare's ~100s cutoff is avoided."""
+        job_id = self._submit_public_job(request)
+        return self._poll_public_job(job_id)
+
+    def _submit_public_job(self, request: RemoteJobRequest) -> str:
+        import json
         import urllib.error
         import urllib.request
 
-        url = f"{self.settings.colab_worker_url.rstrip('/')}/job"
+        url = f"{self.settings.colab_worker_url.rstrip('/')}/jobs"
         payload = request.model_dump_json().encode("utf-8")
-        headers = {"Content-Type": "application/json"}
-        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         try:
-            with urllib.request.urlopen(req, timeout=self.settings.colab_timeout_sec) as resp:
-                body = resp.read().decode("utf-8")
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Worker HTTP {exc.code} at {url}: {detail}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Worker unreachable at {url}: {exc}") from exc
-        response = RemoteJobResponse.model_validate_json(body)
-        if not response.ok:
-            raise RuntimeError(response.error or "Remote Colab job failed")
-        return response
+
+        job_id = str(body.get("job_id") or "").strip()
+        if not job_id:
+            raise RuntimeError(f"Worker /jobs response missing job_id: {body!r}")
+        logger.info("Submitted public worker job %s (%s)", job_id, request.job)
+        return job_id
+
+    def _poll_public_job(self, job_id: str) -> RemoteJobResponse:
+        import json
+        import time
+        import urllib.error
+        import urllib.request
+
+        url = f"{self.settings.colab_worker_url.rstrip('/')}/jobs/{job_id}"
+        deadline = time.monotonic() + float(self.settings.colab_timeout_sec)
+        interval = max(0.5, float(self.settings.colab_job_poll_interval_sec))
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"Timed out waiting for public worker job {job_id} "
+                    f"after {self.settings.colab_timeout_sec}s"
+                )
+            req = urllib.request.Request(url, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=min(30.0, remaining)) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"Worker HTTP {exc.code} at {url}: {detail}") from exc
+            except urllib.error.URLError as exc:
+                raise RuntimeError(f"Worker unreachable at {url}: {exc}") from exc
+
+            status = str(body.get("status") or "")
+            if status in {"done", "error"}:
+                response = RemoteJobResponse(
+                    ok=bool(body.get("ok")),
+                    result=body.get("result"),
+                    error=body.get("error"),
+                )
+                if not response.ok:
+                    raise RuntimeError(response.error or f"Remote Colab job {job_id} failed")
+                return response
+            if status not in {"queued", "running"}:
+                raise RuntimeError(f"Unexpected job status for {job_id}: {body!r}")
+
+            time.sleep(min(interval, max(0.1, deadline - time.monotonic())))
 
     def _ensure_drive_mounted(self) -> None:
         """Mount Drive via Colab CLI (works without notebook UI auth popup)."""
