@@ -61,6 +61,38 @@ def main() -> None:
     if args.with_keyframes and "keyframes" not in pull_paths:
         pull_paths.append("keyframes")
 
+    if args.with_keyframes:
+        from video_retrieval.storage.drive_sync import (
+            DriveDataSync,
+            _discover_keyframe_zips,
+        )
+
+        sync = DriveDataSync(
+            mount_point=settings.drive_mount,
+            data_path=settings.drive_data_path,
+            local_dir=REMOTE_DATA_DIR,
+            local_mirror="",
+            mount_on_access=True,
+        )
+        source_root = sync.remote_root()
+        zips = _discover_keyframe_zips(source_root)
+        print(f"[bootstrap] Drive root for keyframes: {source_root}", flush=True)
+        if not zips:
+            raise SystemExit(
+                f"PULL_KEYFRAMES/--with-keyframes set, but no keyframes zip found under "
+                f"{source_root}. Expected one of:\n"
+                f"  {source_root / 'keyframes.zip'}\n"
+                f"  {source_root / 'keyframes_*.zip'}\n"
+                f"  {source_root / 'keyframes' / '*.zip'}\n"
+                "Check DRIVE_DATA_PATH in .env.colab and that Drive is mounted."
+            )
+        for zip_path in zips:
+            try:
+                size_gb = zip_path.stat().st_size / (1024**3)
+            except OSError:
+                size_gb = 0.0
+            print(f"[bootstrap] will extract: {zip_path} ({size_gb:.1f} GiB)", flush=True)
+
     request = {
         "job": "session_pull",
         "drive_mount": settings.drive_mount,

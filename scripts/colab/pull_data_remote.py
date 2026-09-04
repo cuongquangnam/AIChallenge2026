@@ -72,6 +72,26 @@ def main() -> None:
     print(f"    remote_data_dir={REMOTE_DATA_DIR}", flush=True)
     print(f"    drive={settings.drive_mount}/{settings.drive_data_path}", flush=True)
     print(f"    paths={paths}", flush=True)
+    if "keyframes" in paths:
+        from video_retrieval.storage.drive_sync import DriveDataSync, _discover_keyframe_zips
+
+        sync = DriveDataSync(
+            mount_point=settings.drive_mount,
+            data_path=settings.drive_data_path,
+            local_dir=REMOTE_DATA_DIR,
+            local_mirror="",
+            mount_on_access=True,
+        )
+        source_root = sync.remote_root()
+        zips = _discover_keyframe_zips(source_root)
+        print(f"    keyframes Drive root={source_root}", flush=True)
+        if not zips:
+            raise SystemExit(
+                f"No keyframes zip under {source_root}. Expected "
+                f"{source_root / 'keyframes.zip'} (or keyframes/*.zip)."
+            )
+        for zip_path in zips:
+            print(f"    will extract {zip_path}", flush=True)
     print("    tip: already-copied files are skipped; Ctrl+C and re-run to resume", flush=True)
 
     response = run_request(

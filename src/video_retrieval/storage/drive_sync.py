@@ -346,10 +346,21 @@ def _hydrate_keyframes(source_root: Path, destination: Path, *, progress: bool) 
         if result.get("action") == "extracted":
             return int(result.get("members") or len(zip_paths))
         if result.get("action") == "skip":
+            if progress:
+                _progress(
+                    f"  keyframes hydrate skip: {result.get('reason')} "
+                    f"video_dirs={result.get('video_dirs')}"
+                )
             return int(result.get("video_dirs") or 0)
         return len(zip_paths)
 
     keyframes_dir = source_root / "keyframes"
+    if progress:
+        _progress(
+            f"  no keyframes.zip under {source_root} "
+            f"(looked for keyframes.zip / keyframes_*.zip / keyframes/*.zip); "
+            f"falling back to loose tree {keyframes_dir}"
+        )
     return _copy_tree(
         keyframes_dir,
         destination,
