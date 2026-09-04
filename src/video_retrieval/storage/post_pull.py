@@ -136,10 +136,12 @@ def prepare_colab_qdrant(
             "url": DEFAULT_QDRANT_URL,
         }, DEFAULT_QDRANT_URL
 
+    snapshots_dir = Path(settings.colab_qdrant_install_dir) / "snapshots"
     points = recover_qdrant_snapshot(
         DEFAULT_QDRANT_URL,
         collection=collection,
         snapshot_path=snapshot,
+        snapshots_dir=snapshots_dir,
         progress=progress,
     )
     return {

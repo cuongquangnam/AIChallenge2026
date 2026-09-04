@@ -5,7 +5,11 @@ import pytest
 
 from video_retrieval.storage.drive_sync import _copy_keyframes
 from video_retrieval.storage.post_pull import extract_keyframes_zip
-from video_retrieval.storage.qdrant_bootstrap import find_qdrant_snapshot, resolve_colab_qdrant_url
+from video_retrieval.storage.qdrant_bootstrap import (
+    find_qdrant_snapshot,
+    resolve_colab_qdrant_url,
+    stage_snapshot_for_recovery,
+)
 
 
 @pytest.mark.unit
@@ -35,6 +39,19 @@ def test_resolve_colab_qdrant_url_uses_server_for_snapshot(settings, tmp_path: P
     (qdir / "video_keyframes_transnet.snapshot").write_bytes(b"snap")
 
     assert resolve_colab_qdrant_url(settings) == "http://127.0.0.1:6333"
+
+
+@pytest.mark.unit
+def test_stage_snapshot_for_recovery_hardlinks(tmp_path: Path) -> None:
+    src = tmp_path / "data" / "qdrant" / "video_keyframes_transnet.snapshot"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"snapshot-bytes")
+    snaps = tmp_path / "qdrant" / "snapshots"
+
+    staged = stage_snapshot_for_recovery(src, snapshots_dir=snaps, progress=False)
+    assert staged == snaps / "video_keyframes_transnet.snapshot"
+    assert staged.read_bytes() == b"snapshot-bytes"
+    assert staged.samefile(src)
 
 
 @pytest.mark.unit

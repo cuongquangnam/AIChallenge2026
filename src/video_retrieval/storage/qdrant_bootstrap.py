@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
+import shutil
 import subprocess
 import tarfile
 import time
@@ -117,12 +119,17 @@ def ensure_qdrant_server(
         print(f"[qdrant] already running at {url}", flush=True)
         return
 
+    # Qdrant 1.13+ only allows file:// recover paths under snapshots_path.
+    snapshots_path = install_dir / "snapshots"
+    snapshots_path.mkdir(parents=True, exist_ok=True)
+
     config_path = install_dir / "config.yaml"
     config_path.write_text(
         "\n".join(
             [
                 "storage:",
                 f"  storage_path: {storage_path.as_posix()}",
+                f"  snapshots_path: {snapshots_path.as_posix()}",
                 "service:",
                 "  host: 127.0.0.1",
                 "  http_port: 6333",
@@ -198,11 +205,57 @@ def _stop_qdrant_on_port(port: int) -> None:
         time.sleep(0.5)
 
 
+def stage_snapshot_for_recovery(
+    snapshot_path: Path,
+    *,
+    snapshots_dir: Path,
+    progress: bool = False,
+) -> Path:
+    """Place ``snapshot_path`` under Qdrant's snapshots dir (required for file:// recover).
+
+    Prefers a hard link (no extra disk), then falls back to a copy.
+    """
+    src = snapshot_path.resolve()
+    if not src.is_file():
+        raise FileNotFoundError(f"Snapshot not found: {src}")
+
+    snapshots_dir = Path(snapshots_dir)
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    dest = (snapshots_dir / src.name).resolve()
+
+    try:
+        if dest.exists() and dest.samefile(src):
+            return dest
+    except OSError:
+        pass
+
+    if dest.exists():
+        dest.unlink()
+
+    try:
+        os.link(src, dest)
+        if progress:
+            print(f"[qdrant] hard-linked snapshot into {dest}", flush=True)
+        return dest
+    except OSError:
+        if progress:
+            size_gb = src.stat().st_size / (1024**3)
+            print(
+                f"[qdrant] copying snapshot into {dest} ({size_gb:.2f} GiB) ...",
+                flush=True,
+            )
+        shutil.copy2(src, dest)
+        if progress:
+            print(f"[qdrant] staged snapshot at {dest}", flush=True)
+        return dest
+
+
 def recover_qdrant_snapshot(
     url: str,
     *,
     collection: str,
     snapshot_path: Path,
+    snapshots_dir: Path | None = None,
     progress: bool = False,
     timeout_sec: float = 3600.0,
 ) -> int:
@@ -217,10 +270,18 @@ def recover_qdrant_snapshot(
             print(f"[qdrant] collection {collection!r} already loaded ({count} points)", flush=True)
         return count
 
-    location = snapshot_path.resolve().as_uri()
+    # Qdrant ≥1.13 rejects file:// URIs outside storage.snapshots_path (default ./snapshots).
+    staged = snapshot_path
+    if snapshots_dir is not None:
+        staged = stage_snapshot_for_recovery(
+            snapshot_path,
+            snapshots_dir=snapshots_dir,
+            progress=progress,
+        )
+    location = staged.resolve().as_uri()
     if progress:
         print(
-            f"[qdrant] recovering {snapshot_path.name} into {collection!r} "
+            f"[qdrant] recovering {staged.name} into {collection!r} "
             f"(client_timeout={timeout_sec:.0f}s) ...",
             flush=True,
         )
