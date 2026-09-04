@@ -183,20 +183,18 @@ qdrant/
 manifests/
 ```
 
-The Colab notebook sets `PULL_KEYFRAMES=True` and runs bootstrap with
-`--with-keyframes`. That **extracts Drive zip(s) directly** into
-`/content/data/keyframes/{video_id}/*.jpg` (no full zip copy onto the VM).
+Session pull **includes keyframes by default**. Bootstrap extracts Drive zip(s)
+directly into `/content/data/keyframes/{video_id}/*.jpg` (no full zip copy).
 Looks for `keyframes.zip` at the Drive data root
 (`MyDrive/video-retrieval/keyframes.zip`) or under `keyframes/`.
-Chain rerank / QA resolve frames via basename under that folder.
 
-To skip (faster start) or pull later:
+To skip (faster start):
 
 ```bash
 # notebook CONFIG: PULL_KEYFRAMES=False
-# or later on the VM:
-cd /content/video-retrieval
-python3 scripts/colab/pull_data_remote.py --with-keyframes
+# or:
+python3 scripts/colab/bootstrap_remote.py --skip-keyframes
+python3 scripts/colab/pull_data_remote.py --skip-keyframes
 ```
 
 ## Troubleshooting

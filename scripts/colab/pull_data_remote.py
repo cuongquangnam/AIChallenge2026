@@ -5,7 +5,7 @@ Shows live progress. Skips pip install. Resumes by skipping files already copied
 
 Usage (on the VM, Drive already mounted):
   python3 /content/video-retrieval/scripts/colab/pull_data_remote.py
-  python3 .../pull_data_remote.py --with-keyframes
+  python3 .../pull_data_remote.py --skip-keyframes
   python3 .../pull_data_remote.py --only manifests,elasticsearch
 """
 from __future__ import annotations
@@ -23,15 +23,12 @@ def main() -> None:
     parser.add_argument(
         "--with-keyframes",
         action="store_true",
-        help=(
-            "Extract Drive keyframes/*.zip into DATA_DIR/keyframes "
-            "(reads zip from Drive; does not copy the archive first)."
-        ),
+        help="Deprecated; keyframes are included by default.",
     )
     parser.add_argument(
         "--skip-keyframes",
         action="store_true",
-        help="Deprecated; keyframes are skipped by default.",
+        help="Skip extracting Drive keyframes.zip.",
     )
     parser.add_argument(
         "--only",
@@ -63,8 +60,6 @@ def main() -> None:
     paths = list(SESSION_PULL_PATHS)
     if args.only.strip():
         paths = [p.strip() for p in args.only.split(",") if p.strip()]
-    elif args.with_keyframes and "keyframes" not in paths:
-        paths.append("keyframes")
     if args.skip_keyframes:
         paths = [p for p in paths if p != "keyframes"]
 
@@ -88,11 +83,12 @@ def main() -> None:
         if not zips:
             raise SystemExit(
                 f"No keyframes zip under {source_root}. Expected "
-                f"{source_root / 'keyframes.zip'} (or keyframes/*.zip)."
+                f"{source_root / 'keyframes.zip'} (or keyframes/*.zip). "
+                "Or pass --skip-keyframes."
             )
         for zip_path in zips:
             print(f"    will extract {zip_path}", flush=True)
-    print("    tip: already-copied files are skipped; Ctrl+C and re-run to resume", flush=True)
+    print("    tip: already-extracted keyframes are skipped; Ctrl+C and re-run to resume", flush=True)
 
     response = run_request(
         {
@@ -111,8 +107,8 @@ def main() -> None:
     print(response.result, flush=True)
     if "keyframes" not in paths:
         print(
-            "Note: keyframes were skipped by default. Search still works; "
-            "rerank/QA image-heavy paths may need --with-keyframes later.",
+            "Note: keyframes were skipped (--skip-keyframes or --only). "
+            "Rerank/QA image paths need local JPGs under DATA_DIR/keyframes.",
             flush=True,
         )
 

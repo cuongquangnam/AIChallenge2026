@@ -17,7 +17,12 @@ def main() -> None:
     parser.add_argument(
         "--with-keyframes",
         action="store_true",
-        help="Also extract Drive keyframes/*.zip into DATA_DIR/keyframes for rerank/QA.",
+        help="Deprecated; keyframes are included in SESSION_PULL_PATHS by default.",
+    )
+    parser.add_argument(
+        "--skip-keyframes",
+        action="store_true",
+        help="Skip extracting Drive keyframes.zip (faster bootstrap).",
     )
     args, _unknown = parser.parse_known_args()
 
@@ -58,10 +63,10 @@ def main() -> None:
         )
 
     pull_paths = list(SESSION_PULL_PATHS)
-    if args.with_keyframes and "keyframes" not in pull_paths:
-        pull_paths.append("keyframes")
+    if args.skip_keyframes:
+        pull_paths = [p for p in pull_paths if p != "keyframes"]
 
-    if args.with_keyframes:
+    if "keyframes" in pull_paths:
         from video_retrieval.storage.drive_sync import (
             DriveDataSync,
             _discover_keyframe_zips,
@@ -79,12 +84,12 @@ def main() -> None:
         print(f"[bootstrap] Drive root for keyframes: {source_root}", flush=True)
         if not zips:
             raise SystemExit(
-                f"PULL_KEYFRAMES/--with-keyframes set, but no keyframes zip found under "
+                f"Keyframes pull is enabled by default, but no keyframes zip found under "
                 f"{source_root}. Expected one of:\n"
                 f"  {source_root / 'keyframes.zip'}\n"
                 f"  {source_root / 'keyframes_*.zip'}\n"
                 f"  {source_root / 'keyframes' / '*.zip'}\n"
-                "Check DRIVE_DATA_PATH in .env.colab and that Drive is mounted."
+                "Check DRIVE_DATA_PATH in .env.colab, or pass --skip-keyframes."
             )
         for zip_path in zips:
             try:
@@ -107,7 +112,7 @@ def main() -> None:
         f"(paths={pull_paths})...",
         flush=True,
     )
-    if args.with_keyframes:
+    if "keyframes" in pull_paths:
         print(
             "[bootstrap] Keyframes unzip enabled: Drive zip(s) extract into "
             f"{REMOTE_DATA_DIR / 'keyframes'} (large archives can take a long time).",
