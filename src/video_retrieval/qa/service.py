@@ -63,8 +63,12 @@ class QAService(EventChainTaskBase):
             self.settings,
             {chain.video_id for chain in chains},
         )
-        if pulled_videos:
-            log_query_stage("qa", "drive_video_pull", videos=len(pulled_videos))
+        log_query_stage(
+            "qa",
+            "drive_video_pull",
+            requested=len({chain.video_id for chain in chains}),
+            pulled=len(pulled_videos),
+        )
 
         log_query_stage("qa", "vlm_answer", chains=len(chains))
         results = self._answer_chains(

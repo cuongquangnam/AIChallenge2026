@@ -11,6 +11,12 @@ from video_retrieval.storage.sync_paths import QA_PULL_PATHS, SEARCH_PULL_PATHS
 logger = logging.getLogger(__name__)
 
 
+def _progress(message: str) -> None:
+    """Emit to logger and stdout (worker.log captures both on Colab)."""
+    logger.info(message)
+    print(message, flush=True)
+
+
 def mount_google_drive(mount_point: str | Path = "/content/drive", *, force_remount: bool = False) -> Path:
     """Mount Google Drive on a Colab VM (no-op if already mounted).
 
@@ -87,6 +93,7 @@ class DriveDataSync:
     def remote_root(self) -> Path:
         if self.local_mirror is not None:
             mirror = self.local_mirror.expanduser().resolve()
+            logger.info("Drive sync using local mirror %s", mirror)
             if mirror.is_dir():
                 return mirror
             raise FileNotFoundError(
@@ -95,27 +102,29 @@ class DriveDataSync:
             )
 
         if self.mount_on_access:
+            logger.info("Drive sync: ensuring mount at %s ...", self.mount_point)
             mount_google_drive(self.mount_point)
         root = self.mount_point / self.data_path if self.data_path else self.mount_point
+        logger.info("Drive sync: resolving data folder %s ...", root)
         if not root.is_dir():
             raise FileNotFoundError(
                 f"Drive data folder not found: {root}. "
                 f"Create {self.data_path} on Google Drive or adjust DRIVE_DATA_PATH."
             )
-        return root.resolve()
+        resolved = root.resolve()
+        logger.info("Drive sync: remote root ready %s", resolved)
+        return resolved
 
     def pull(self, *, paths: list[str] | tuple[str, ...] | None = None) -> int:
         """Copy selected subfolders from Drive into local_dir."""
         selected = list(paths or SEARCH_PULL_PATHS)
+        _progress(f"[pull] starting {len(selected)} path(s) from Drive → {self.local_dir}")
         source_root = self.remote_root()
         copied = 0
         total_paths = len(selected)
         for idx, path_name in enumerate(selected, start=1):
             src = source_root / path_name
-            print(
-                f"[pull {idx}/{total_paths}] {path_name} from {src} ...",
-                flush=True,
-            )
+            _progress(f"[pull {idx}/{total_paths}] {path_name} from {src} ...")
             if path_name == "keyframes":
                 n = _copy_keyframes(src, self.local_dir / path_name, progress=True)
             else:
@@ -125,30 +134,34 @@ class DriveDataSync:
                     label=path_name,
                     progress=True,
                 )
-            print(f"[pull {idx}/{total_paths}] {path_name}: copied {n} file(s)", flush=True)
+            _progress(f"[pull {idx}/{total_paths}] {path_name}: copied {n} file(s)")
             copied += n
+        _progress(f"[pull] finished total_copied={copied}")
         return copied
 
     def push(self, *, paths: list[str] | tuple[str, ...] | None = None) -> int:
         """Copy selected local_dir subfolders up to Drive."""
         selected = list(paths or QA_PULL_PATHS)
+        _progress(f"[push] starting {len(selected)} path(s) → Drive")
         dest_root = self.remote_root()
         copied = 0
         for path_name in selected:
-            print(f"[push] {path_name} ...", flush=True)
+            _progress(f"[push] {path_name} ...")
             n = _copy_tree(
                 self.local_dir / path_name,
                 dest_root / path_name,
                 label=path_name,
                 progress=True,
             )
-            print(f"[push] {path_name}: copied {n} file(s)", flush=True)
+            _progress(f"[push] {path_name}: copied {n} file(s)")
             copied += n
+        _progress(f"[push] finished total_copied={copied}")
         return copied
 
     def upload_file(self, local_path: Path, *, dest_relative: str) -> None:
         dest = self.remote_root() / dest_relative.strip("/")
         dest.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Drive upload: %s → %s", local_path, dest)
         shutil.copy2(local_path, dest)
 
     def download_file(self, *, src_relative: str, local_path: Path) -> None:
@@ -156,9 +169,11 @@ class DriveDataSync:
         if not src.is_file():
             raise FileNotFoundError(src)
         local_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Drive download: %s → %s", src, local_path)
         shutil.copy2(src, local_path)
 
     def download_paths(self, relative_paths: list[str]) -> int:
+        logger.info("Drive download_paths: %s path(s) requested", len(relative_paths))
         copied = 0
         for relative in relative_paths:
             relative = relative.strip("/")
@@ -169,10 +184,15 @@ class DriveDataSync:
                 continue
             src = self.remote_root() / relative
             if not src.is_file():
+                logger.debug("Drive download_paths: missing %s", src)
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
+            logger.info("Drive download_paths: copying %s → %s", src, target)
+            t0 = time.monotonic()
             shutil.copy2(src, target)
+            logger.info("Drive download_paths: copied %s in %.1fs", relative, time.monotonic() - t0)
             copied += 1
+        logger.info("Drive download_paths: done copied=%s", copied)
         return copied
 
 
@@ -188,7 +208,7 @@ def _copy_tree(
 ) -> int:
     if not source.exists():
         if progress:
-            print(f"  skip (missing): {source}", flush=True)
+            _progress(f"  skip (missing): {source}")
         return 0
     if source.is_file():
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -199,7 +219,7 @@ def _copy_tree(
     total = len(files)
     name = label or source.name
     if progress:
-        print(f"  scanning {name}: {total} file(s)", flush=True)
+        _progress(f"  scanning {name}: {total} file(s)")
 
     copied = 0
     skipped = 0
@@ -210,10 +230,9 @@ def _copy_tree(
         dest = destination / rel
         now = time.monotonic()
         if progress and (now - last_beat) >= 10.0:
-            print(
+            _progress(
                 f"  {name}: still working… {copied + skipped + failed}/{total} "
-                f"(copied={copied} skipped={skipped} failed={failed}) current={rel}",
-                flush=True,
+                f"(copied={copied} skipped={skipped} failed={failed}) current={rel}"
             )
             last_beat = now
 
@@ -224,10 +243,9 @@ def _copy_tree(
                     if progress and ((copied + skipped) % progress_every == 0):
                         done = copied + skipped + failed
                         pct = (100.0 * done / total) if total else 100.0
-                        print(
+                        _progress(
                             f"  {name}: {done}/{total} ({pct:.1f}%) "
-                            f"[copied={copied} skipped={skipped}]",
-                            flush=True,
+                            f"[copied={copied} skipped={skipped}]"
                         )
                     continue
             except OSError:
@@ -240,23 +258,21 @@ def _copy_tree(
         except Exception as exc:  # noqa: BLE001 - keep pulling other files
             failed += 1
             if progress:
-                print(f"  WARN skip {rel}: {exc}", flush=True)
+                _progress(f"  WARN skip {rel}: {exc}")
             continue
 
         done = copied + skipped + failed
         if progress and (done % progress_every == 0 or done == total):
             pct = (100.0 * done / total) if total else 100.0
-            print(
+            _progress(
                 f"  {name}: {done}/{total} ({pct:.1f}%) "
-                f"[copied={copied} skipped={skipped} failed={failed}]",
-                flush=True,
+                f"[copied={copied} skipped={skipped} failed={failed}]"
             )
             last_beat = time.monotonic()
 
     if progress:
-        print(
-            f"  {name}: finished copied={copied} skipped={skipped} failed={failed}",
-            flush=True,
+        _progress(
+            f"  {name}: finished copied={copied} skipped={skipped} failed={failed}"
         )
     return copied
 
@@ -268,10 +284,9 @@ def _copy_keyframes(source: Path, destination: Path, *, progress: bool) -> int:
         if progress:
             names = ", ".join(path.name for path in zip_paths[:5])
             suffix = " ..." if len(zip_paths) > 5 else ""
-            print(
+            _progress(
                 f"  found {len(zip_paths)} zip archive(s) ({names}{suffix}); "
-                "copying archives instead of loose keyframes",
-                flush=True,
+                "copying archives instead of loose keyframes"
             )
         destination.mkdir(parents=True, exist_ok=True)
         copied = 0
@@ -279,6 +294,7 @@ def _copy_keyframes(source: Path, destination: Path, *, progress: bool) -> int:
             dest = destination / zip_path.name
             if dest.is_file() and dest.stat().st_size == zip_path.stat().st_size:
                 continue
+            logger.info("Drive keyframes: copying archive %s ...", zip_path.name)
             _copy_file(zip_path, dest, timeout_sec=300.0)
             copied += 1
         return copied
@@ -287,6 +303,7 @@ def _copy_keyframes(source: Path, destination: Path, *, progress: bool) -> int:
 
 def _copy_file(src: Path, dest: Path, *, timeout_sec: float) -> None:
     """Copy file contents (no metadata). Abort if Drive FUSE stalls."""
+    logger.debug("Drive copyfile %s → %s (timeout=%.0fs)", src, dest, timeout_sec)
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(shutil.copyfile, src, dest)
         future.result(timeout=timeout_sec)

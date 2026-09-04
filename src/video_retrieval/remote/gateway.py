@@ -112,6 +112,10 @@ class RemoteComputeGateway:
         if not relative_paths:
             return 0
         try:
+            logger.info(
+                "Syncing %s keyframe(s) from Drive for UI display ...",
+                len(relative_paths),
+            )
             downloaded = self.sync.download_paths(relative_paths)
             logger.info("Synced %s keyframe(s) from Drive for UI display", downloaded)
             return downloaded

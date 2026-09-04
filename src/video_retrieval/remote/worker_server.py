@@ -52,6 +52,11 @@ _run_lock = threading.Lock()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        force=True,
+    )
     data_dir = os.environ.get("COLAB_REMOTE_DATA_DIR", DEFAULT_DATA_DIR)
     settings = get_settings(data_dir=data_dir, colab=True)
     logger.info("Warming Colab worker runtime (data_dir=%s)...", data_dir)
