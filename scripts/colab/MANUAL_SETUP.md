@@ -38,8 +38,41 @@ ES_INDEX=video_text_transnet
 ./scripts/colab/laptop_open_notebook.sh
 ```
 
+Or open `scripts/colab/colab_setup.ipynb` in Colab manually.
+
 That starts the session (if needed), uploads `scripts/colab/colab_setup.ipynb`
 to `/content/colab_setup.ipynb`, and opens the Colab UI.
+
+### Notebook flow
+
+1. CONFIG (Colab Secrets) → Mount Drive → Clone/pull → Write `.env.colab`
+2. Bootstrap (ES + Qdrant)
+3. Start worker `:8765`
+4. **Cloudflare tunnel** cell → copy `COLAB_WORKER_PUBLIC_URL`
+5. Keepalive cell running
+
+### Laptop `.env` for tunnel (no Colab CLI needed for search)
+
+```env
+REMOTE_COMPUTE=colab
+COLAB_WORKER_PUBLIC_URL=https://xxxx.trycloudflare.com
+COLAB_WORKER_MODE=tunnel
+```
+
+```bash
+video-index colab search "yellow lion"
+# or
+video-index serve
+```
+
+`COLAB_WORKER_MODE`:
+
+| Value | Behavior |
+|---|---|
+| `auto` (default) | Prefer worker; fall back to oneshot exec if worker is down |
+| `persistent` | Require worker (fail if not running) |
+| `oneshot` | Old behavior: load models inside every `colab exec` |
+| `tunnel` | Laptop POSTs directly to `COLAB_WORKER_PUBLIC_URL` (Cloudflare) |
 
 ### Colab notebook
 
@@ -95,16 +128,9 @@ After bootstrap, start (or restart) the warm worker from the notebook cell, or:
 ```
 
 - Listens on the VM at `http://127.0.0.1:8765` (not exposed to the internet)
-- Laptop jobs still use `colab exec`, but only as a thin HTTP proxy to that worker
+- With tunnel mode, laptop POSTs to the Cloudflare URL; otherwise jobs use `colab exec` as a thin HTTP proxy
 - First start can take several minutes (model load); later searches reuse the process
 - Logs: `/content/video-retrieval/worker.log`
-`COLAB_WORKER_MODE`:
-
-| Value | Behavior |
-|---|---|
-| `auto` (default) | Prefer worker; fall back to oneshot exec if worker is down |
-| `persistent` | Require worker (fail if not running) |
-| `oneshot` | Old behavior: load models inside every `colab exec` |
 
 ### What `laptop_upload_env.sh` does
 

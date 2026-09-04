@@ -90,10 +90,14 @@ class ColabRunner:
 
     def ensure_session(self) -> None:
         """Verify Colab is reachable; optionally auto-bootstrap when colab_auto_manage=true."""
+        if self.settings.uses_public_worker:
+            self._ensure_public_worker()
+            return
         if not self._session_running():
             raise RuntimeError(
                 f"Colab session {self.settings.colab_session!r} is not running. "
-                "Start it manually and run scripts/colab/MANUAL_SETUP.md steps."
+                "Start it manually and run scripts/colab/MANUAL_SETUP.md steps. "
+                "Or set COLAB_WORKER_PUBLIC_URL to your Cloudflare tunnel URL."
             )
         if not self.settings.colab_auto_manage:
             return
@@ -102,6 +106,50 @@ class ColabRunner:
         if not self._session_data_pulled:
             self._pull_session_data()
             self._session_data_pulled = True
+
+    def _ensure_public_worker(self) -> None:
+        url = f"{self.settings.colab_worker_url.rstrip('/')}/health"
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"health status {resp.status}")
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"Public Colab worker not reachable at {url}. "
+                "On the notebook: start worker, then run the Cloudflare tunnel cell, "
+                "and set COLAB_WORKER_PUBLIC_URL on the laptop.\n"
+                f"Detail: {exc}"
+            ) from exc
+
+    def _run(self, request: RemoteJobRequest) -> RemoteJobResponse:
+        self.ensure_session()
+        if self.settings.uses_public_worker:
+            return self._run_public_http(request)
+        return self._exec_request(request)
+
+    def _run_public_http(self, request: RemoteJobRequest) -> RemoteJobResponse:
+        import urllib.error
+        import urllib.request
+
+        url = f"{self.settings.colab_worker_url.rstrip('/')}/job"
+        payload = request.model_dump_json().encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.settings.colab_timeout_sec) as resp:
+                body = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Worker HTTP {exc.code} at {url}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Worker unreachable at {url}: {exc}") from exc
+        response = RemoteJobResponse.model_validate_json(body)
+        if not response.ok:
+            raise RuntimeError(response.error or "Remote Colab job failed")
+        return response
 
     def _ensure_drive_mounted(self) -> None:
         """Mount Drive via Colab CLI (works without notebook UI auth popup)."""
@@ -157,10 +205,6 @@ class ColabRunner:
             **kwargs,
         )
 
-    def _run(self, request: RemoteJobRequest) -> RemoteJobResponse:
-        self.ensure_session()
-        return self._exec_request(request)
-
     def _exec_request(self, request: RemoteJobRequest) -> RemoteJobResponse:
         with tempfile.TemporaryDirectory(prefix="vr-colab-") as tmp_dir:
             request_path = Path(tmp_dir) / "request.json"
@@ -177,17 +221,18 @@ class ColabRunner:
                 remote_request,
             )
             mode = self.settings.colab_worker_mode.strip().lower() or "auto"
-            if mode in {"auto", "persistent"}:
+            if mode in {"auto", "persistent", "tunnel"}:
                 try:
                     payload = self._colab_exec_worker(
                         remote_request,
                         via_http=True,
                     )
                 except Exception as exc:
-                    if mode == "persistent":
+                    if mode in {"persistent", "tunnel"}:
                         raise RuntimeError(
                             "Persistent Colab worker is required but unreachable. "
-                            "Run: ./scripts/colab/laptop_start_worker.sh\n"
+                            "Run the notebook worker + Cloudflare tunnel cells, "
+                            "or: ./scripts/colab/laptop_start_worker.sh\n"
                             f"Detail: {exc}"
                         ) from exc
                     logger.warning(
@@ -229,7 +274,8 @@ class ColabRunner:
         return _extract_json_payload(completed.stdout)
 
     def _http_proxy_script(self, remote_request_path: str) -> str:
-        worker_url = self.settings.colab_worker_url.rstrip("/")
+        # Localhost on the VM — public URL is used only by the laptop direct path.
+        worker_url = f"http://127.0.0.1:{int(self.settings.colab_worker_port)}"
         timeout = int(self.settings.colab_timeout_sec)
         return textwrap.dedent(
             f"""
@@ -241,10 +287,11 @@ class ColabRunner:
             with open({remote_request_path!r}, encoding="utf-8") as handle:
                 request = json.load(handle)
             data = json.dumps(request).encode("utf-8")
+            headers = {{"Content-Type": "application/json"}}
             req = urllib.request.Request(
                 worker_url,
                 data=data,
-                headers={{"Content-Type": "application/json"}},
+                headers=headers,
                 method="POST",
             )
             try:

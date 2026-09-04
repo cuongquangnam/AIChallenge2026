@@ -87,16 +87,27 @@ class Settings(BaseSettings):
     #   auto        — prefer persistent worker HTTP; fall back to oneshot exec
     #   persistent  — require long-running worker on the VM
     #   oneshot     — legacy: load models inside each colab exec
+    #   tunnel      — laptop POSTs directly to COLAB_WORKER_PUBLIC_URL (Cloudflare)
     colab_worker_mode: str = "auto"
     colab_worker_port: int = 8765
     colab_worker_ready_timeout_sec: float = 900.0
+    # Public Cloudflare (or other) tunnel URL to the Colab worker, e.g. https://xxx.trycloudflare.com
+    # When set, laptop search/KIS/QA skip Colab CLI and call this URL directly.
+    colab_worker_public_url: str = ""
 
     @property
     def uses_remote_compute(self) -> bool:
         return self.remote_compute.strip().lower() == "colab"
 
     @property
+    def uses_public_worker(self) -> bool:
+        return bool(self.colab_worker_public_url.strip())
+
+    @property
     def colab_worker_url(self) -> str:
+        public = self.colab_worker_public_url.strip().rstrip("/")
+        if public:
+            return public
         return f"http://127.0.0.1:{int(self.colab_worker_port)}"
 
     @property

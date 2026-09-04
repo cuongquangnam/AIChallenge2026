@@ -57,11 +57,10 @@ def health() -> HealthResponse:
 @app.post("/job", response_model=RemoteJobResponse)
 def job(body: dict[str, Any]) -> RemoteJobResponse:
     try:
-        request = RemoteJobRequest.model_validate(body)
+        request_model = RemoteJobRequest.model_validate(body)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    response = run_request(request)
+    response = run_request(request_model)
     if not response.ok:
-        # Still return 200 with ok=false so the laptop client can parse RemoteJobResponse.
         logger.error("Worker job failed: %s", response.error)
     return response
