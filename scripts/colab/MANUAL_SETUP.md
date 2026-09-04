@@ -1,7 +1,8 @@
 # Manual Colab session setup
 
-Laptop hosts the UI; **Colab CLI VM** runs search/KIS/QA on a **persistent worker**
-(models loaded once). Configure everything in **`.env`** on your laptop.
+Laptop hosts the UI; **Colab GPU VM** runs search/KIS/QA on a **persistent worker**
+(models loaded once). Preferred control plane: a **Colab notebook** for mount /
+bootstrap / worker / keepalive. Configure secrets in laptop **`.env`**.
 
 ## Prerequisites
 
@@ -25,9 +26,41 @@ DRIVE_LOCAL_PATH=
 COLAB_REPO_URL=https://github.com/you/AIChallenge2026_2.git
 COLAB_REPO_BRANCH=cuong/use-colab
 GEMINI_API_KEY=your-key
+QDRANT_COLLECTION=video_keyframes_transnet
+ES_INDEX=video_text_transnet
 ```
 
-## Setup (laptop → CLI VM)
+## Recommended setup (notebook + laptop UI)
+
+### Laptop
+
+```bash
+./scripts/colab/laptop_open_notebook.sh
+```
+
+That starts the session (if needed), uploads `scripts/colab/colab_setup.ipynb`
+to `/content/colab_setup.ipynb`, and opens the Colab UI.
+
+### Colab notebook
+
+Open `/content/colab_setup.ipynb`:
+
+1. Add Colab Secrets (sidebar key icon): `GEMINI_API_KEY`, `COLAB_REPO_URL`, optional `COLAB_REPO_BRANCH`, `GITHUB_TOKEN`
+2. **Runtime → Run all**
+3. Leave the keepalive cell running
+
+No laptop `.env` upload is required for this path; the notebook writes `.env.colab` from secrets + defaults.
+
+### Laptop UI
+
+```bash
+video-index serve
+```
+
+Do **not** run `laptop_monitor_progress.sh` while searching; the notebook
+keepalive is enough and avoids Jupyter kernel contention.
+
+## Alternative setup (laptop → CLI only)
 
 ```bash
 ./scripts/colab/laptop_start_session.sh
@@ -39,20 +72,12 @@ Or step by step:
 ```bash
 ./scripts/colab/laptop_clone.sh
 ./scripts/colab/laptop_upload_env.sh
-./scripts/colab/laptop_bootstrap.sh      # runs colab drivemount, then bootstrap_remote.py
-./scripts/colab/laptop_start_worker.sh   # long-running process; loads SigLIP/BLIP once
-```
-
-While bootstrap is running, monitor progress from another laptop terminal:
-
-```bash
-./scripts/colab/laptop_monitor_progress.sh        # poll every 15s
-./scripts/colab/laptop_monitor_progress.sh 30     # poll every 30s
-./scripts/colab/laptop_monitor_progress.sh --once # single snapshot
+./scripts/colab/laptop_bootstrap.sh
+./scripts/colab/laptop_start_worker.sh
 ```
 
 Drive auth cannot run inside `colab console` / raw `python3` (`drive.mount` needs the notebook UI).
-The laptop scripts call `colab drivemount` for you. Manual equivalent:
+Notebook mount is preferred. CLI equivalent:
 
 ```bash
 ./scripts/colab/laptop_drivemount.sh
@@ -61,7 +86,7 @@ The laptop scripts call `colab drivemount` for you. Manual equivalent:
 
 ### Persistent worker
 
-After bootstrap, start (or restart) the warm worker:
+After bootstrap, start (or restart) the warm worker from the notebook cell, or:
 
 ```bash
 ./scripts/colab/laptop_start_worker.sh
@@ -72,8 +97,7 @@ After bootstrap, start (or restart) the warm worker:
 - Listens on the VM at `http://127.0.0.1:8765` (not exposed to the internet)
 - Laptop jobs still use `colab exec`, but only as a thin HTTP proxy to that worker
 - First start can take several minutes (model load); later searches reuse the process
-- Logs: `/content/video-retrieval/worker.log` (view via `colab console` or `colab log`)
-
+- Logs: `/content/video-retrieval/worker.log`
 `COLAB_WORKER_MODE`:
 
 | Value | Behavior |

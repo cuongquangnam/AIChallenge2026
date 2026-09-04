@@ -12,7 +12,8 @@ from qdrant_client import QdrantClient
 
 logger = logging.getLogger(__name__)
 
-QDRANT_VERSION = "1.12.5"
+# Keep the server within ±1 minor of the installed qdrant-client (Colab often has 1.19.x).
+QDRANT_VERSION = "1.19.0"
 QDRANT_ARTIFACT = "qdrant-x86_64-unknown-linux-gnu.tar.gz"
 QDRANT_DOWNLOAD_URL = (
     f"https://github.com/qdrant/qdrant/releases/download/v{QDRANT_VERSION}/{QDRANT_ARTIFACT}"
@@ -60,10 +61,26 @@ def ensure_qdrant_server(
     startup_timeout_sec: float = 120.0,
 ) -> None:
     """Download and start a single-node Qdrant HTTP server if ``url`` is not reachable."""
-    if is_qdrant_ready(url):
+    install_dir = Path(install_dir)
+    storage_path = Path(storage_path)
+    install_dir.mkdir(parents=True, exist_ok=True)
+    storage_path.mkdir(parents=True, exist_ok=True)
+
+    binary = install_dir / "qdrant"
+    version_stamp = install_dir / f".qdrant-version-{QDRANT_VERSION}"
+    needs_install = not binary.is_file() or not version_stamp.is_file()
+
+    if is_qdrant_ready(url) and not needs_install:
         logger.info("Qdrant already running at %s", url)
         print(f"[qdrant] already running at {url}", flush=True)
         return
+
+    if is_qdrant_ready(url) and needs_install:
+        print(
+            f"[qdrant] outdated server is running; stop it before upgrading to {QDRANT_VERSION}",
+            flush=True,
+        )
+        _stop_qdrant_on_port(6333)
 
     if not _can_run_qdrant_binary():
         raise RuntimeError(
@@ -72,16 +89,17 @@ def ensure_qdrant_server(
             "of a .snapshot file."
         )
 
-    install_dir = Path(install_dir)
-    storage_path = Path(storage_path)
-    install_dir.mkdir(parents=True, exist_ok=True)
-    storage_path.mkdir(parents=True, exist_ok=True)
-
-    binary = install_dir / "qdrant"
-    if not binary.is_file():
+    if needs_install:
         print(f"[qdrant] downloading Qdrant {QDRANT_VERSION} ...", flush=True)
         _download_qdrant_binary(install_dir)
+        for stale in install_dir.glob(".qdrant-version-*"):
+            stale.unlink(missing_ok=True)
+        version_stamp.write_text(QDRANT_VERSION + "\n", encoding="utf-8")
         print(f"[qdrant] installed to {binary}", flush=True)
+
+    if is_qdrant_ready(url):
+        print(f"[qdrant] already running at {url}", flush=True)
+        return
 
     config_path = install_dir / "config.yaml"
     config_path.write_text(
@@ -135,6 +153,29 @@ def ensure_qdrant_server(
     )
 
 
+def _stop_qdrant_on_port(port: int) -> None:
+    """Best-effort stop of a local Qdrant process listening on ``port``."""
+    try:
+        out = subprocess.check_output(["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"], text=True)
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return
+    for raw in out.split():
+        try:
+            pid = int(raw.strip())
+        except ValueError:
+            continue
+        print(f"[qdrant] stopping pid={pid} on :{port}", flush=True)
+        try:
+            subprocess.check_call(["kill", str(pid)])
+        except subprocess.CalledProcessError:
+            continue
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        if not is_qdrant_ready(DEFAULT_QDRANT_URL):
+            return
+        time.sleep(0.5)
+
+
 def recover_qdrant_snapshot(
     url: str,
     *,
@@ -144,7 +185,10 @@ def recover_qdrant_snapshot(
     timeout_sec: float = 3600.0,
 ) -> int:
     """Recover a collection from a local ``.snapshot`` file via the Qdrant HTTP API."""
-    client = QdrantClient(url=url, timeout=timeout_sec)
+    # Long client-side HTTP timeout only. Do not pass timeout= into recover_snapshot:
+    # older Qdrant servers reject that query param, and newer clients still work with
+    # the constructor timeout + wait=True.
+    client = QdrantClient(url=url, timeout=timeout_sec, check_compatibility=False)
     if collection_has_points(client, collection):
         count = int(client.get_collection(collection).points_count or 0)
         if progress:
@@ -155,14 +199,13 @@ def recover_qdrant_snapshot(
     if progress:
         print(
             f"[qdrant] recovering {snapshot_path.name} into {collection!r} "
-            f"(timeout={timeout_sec:.0f}s) ...",
+            f"(client_timeout={timeout_sec:.0f}s) ...",
             flush=True,
         )
     client.recover_snapshot(
         collection_name=collection,
         location=location,
         wait=True,
-        timeout=timeout_sec,
     )
     count = _wait_for_collection_points(
         client,
