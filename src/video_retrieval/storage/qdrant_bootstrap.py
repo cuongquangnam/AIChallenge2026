@@ -250,12 +250,58 @@ def stage_snapshot_for_recovery(
         return dest
 
 
+def wipe_qdrant_storage(
+    *,
+    url: str,
+    storage_path: Path,
+    install_dir: Path,
+    progress: bool = False,
+    startup_timeout_sec: float = 1800.0,
+) -> None:
+    """Stop Qdrant, delete ``storage_path``, and start a clean server.
+
+    Used before snapshot recover when a prior attempt left corrupt segment files.
+    """
+    storage_path = Path(storage_path)
+    install_dir = Path(install_dir)
+    if progress:
+        print(f"[qdrant] wiping storage at {storage_path} for clean recover ...", flush=True)
+    _stop_qdrant_on_port(6333)
+    if storage_path.exists():
+        shutil.rmtree(storage_path)
+    storage_path.mkdir(parents=True, exist_ok=True)
+    ensure_qdrant_server(
+        url,
+        install_dir=install_dir,
+        storage_path=storage_path,
+        startup_timeout_sec=startup_timeout_sec,
+    )
+
+
+def _collection_dir_exists(storage_path: Path, collection: str) -> bool:
+    return (Path(storage_path) / "collections" / collection).is_dir()
+
+
+def _delete_collection_best_effort(client: QdrantClient, collection: str, *, progress: bool) -> None:
+    try:
+        if not client.collection_exists(collection):
+            return
+        if progress:
+            print(f"[qdrant] deleting empty/broken collection {collection!r} ...", flush=True)
+        client.delete_collection(collection)
+    except Exception as exc:  # noqa: BLE001
+        if progress:
+            print(f"[qdrant] delete_collection failed ({exc}); will wipe storage", flush=True)
+
+
 def recover_qdrant_snapshot(
     url: str,
     *,
     collection: str,
     snapshot_path: Path,
     snapshots_dir: Path | None = None,
+    storage_path: Path | None = None,
+    install_dir: Path | None = None,
     progress: bool = False,
     timeout_sec: float = 3600.0,
 ) -> int:
@@ -263,12 +309,31 @@ def recover_qdrant_snapshot(
     # Long client-side HTTP timeout only. Do not pass timeout= into recover_snapshot:
     # older Qdrant servers reject that query param, and newer clients still work with
     # the constructor timeout + wait=True.
+    from qdrant_client.http.models import SnapshotPriority
+
     client = QdrantClient(url=url, timeout=timeout_sec, check_compatibility=False)
     if collection_has_points(client, collection):
         count = int(client.get_collection(collection).points_count or 0)
         if progress:
             print(f"[qdrant] collection {collection!r} already loaded ({count} points)", flush=True)
         return count
+
+    # Prior failed recovers often leave half-written segment dirs that break the next attempt.
+    if storage_path is not None and (
+        _collection_dir_exists(storage_path, collection)
+        or client.collection_exists(collection)
+    ):
+        _delete_collection_best_effort(client, collection, progress=progress)
+        if install_dir is not None and (
+            _collection_dir_exists(storage_path, collection) or client.collection_exists(collection)
+        ):
+            wipe_qdrant_storage(
+                url=url,
+                storage_path=storage_path,
+                install_dir=install_dir,
+                progress=progress,
+            )
+            client = QdrantClient(url=url, timeout=timeout_sec, check_compatibility=False)
 
     # Qdrant ≥1.13 rejects file:// URIs outside storage.snapshots_path (default ./snapshots).
     staged = snapshot_path
@@ -279,17 +344,40 @@ def recover_qdrant_snapshot(
             progress=progress,
         )
     location = staged.resolve().as_uri()
-    if progress:
-        print(
-            f"[qdrant] recovering {staged.name} into {collection!r} "
-            f"(client_timeout={timeout_sec:.0f}s) ...",
-            flush=True,
+
+    def _do_recover() -> None:
+        if progress:
+            print(
+                f"[qdrant] recovering {staged.name} into {collection!r} "
+                f"(client_timeout={timeout_sec:.0f}s) ...",
+                flush=True,
+            )
+        client.recover_snapshot(
+            collection_name=collection,
+            location=location,
+            priority=SnapshotPriority.SNAPSHOT,
+            wait=True,
         )
-    client.recover_snapshot(
-        collection_name=collection,
-        location=location,
-        wait=True,
-    )
+
+    try:
+        _do_recover()
+    except Exception as exc:
+        if storage_path is None or install_dir is None:
+            raise
+        if progress:
+            print(
+                f"[qdrant] recover failed ({exc}); wiping storage and retrying once ...",
+                flush=True,
+            )
+        wipe_qdrant_storage(
+            url=url,
+            storage_path=storage_path,
+            install_dir=install_dir,
+            progress=progress,
+        )
+        client = QdrantClient(url=url, timeout=timeout_sec, check_compatibility=False)
+        _do_recover()
+
     count = _wait_for_collection_points(
         client,
         collection,
