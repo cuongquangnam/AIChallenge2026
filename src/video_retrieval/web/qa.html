@@ -31,7 +31,7 @@
           <code>video_id,frame_id[,time_sec],answer</code>.
         </p>
 
-        <form id="qa-form" class="search-form" autocomplete="off">
+        <form id="qa-form" class="search-form" autocomplete="off" onsubmit="return false;">
           <label class="sr-only" for="question">QA question</label>
           <textarea
             id="question"
@@ -59,15 +59,17 @@
                 <option value="100">100</option>
               </select>
             </label>
-            <button type="submit" id="submit-btn">Run QA</button>
-            <button type="button" id="import-btn" class="import-btn">Import CSV</button>
-            <input
-              id="import-csv"
-              type="file"
-              accept=".csv,text/csv"
-              hidden
-            />
-            <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+            <div class="controls-actions">
+              <button type="submit" id="submit-btn">Run QA</button>
+              <button type="button" id="import-btn" class="import-btn">Import CSV</button>
+              <input
+                id="import-csv"
+                type="file"
+                accept=".csv,text/csv"
+                hidden
+              />
+              <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+            </div>
           </div>
         </form>
       </header>

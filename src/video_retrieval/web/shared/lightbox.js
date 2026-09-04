@@ -119,14 +119,14 @@ export function createLightboxController({
     openVideoBtn?.addEventListener("click", () => {
       if (activeHit) playAtTime(activeHit);
     });
-    dialog.addEventListener("close", stopVideo);
-    if (onBackdropClose) {
+    dialog?.addEventListener("close", stopVideo);
+    if (onBackdropClose && dialog) {
       dialog.addEventListener("click", (event) => {
         if (event.target === dialog) close();
       });
     }
-    video.addEventListener("play", notifyVideoActivity);
-    video.addEventListener("loadeddata", notifyVideoActivity);
+    video?.addEventListener("play", notifyVideoActivity);
+    video?.addEventListener("loadeddata", notifyVideoActivity);
   }
 
   return {

@@ -172,6 +172,8 @@ def health() -> dict[str, str]:
         payload["compute"] = "colab"
         payload["storage"] = "drive"
         payload["drive_path"] = settings.drive_data_path or settings.drive_local_path or "(unset)"
+        payload["worker_url"] = settings.colab_worker_url
+        payload["public_worker"] = "true" if settings.uses_public_worker else "false"
     else:
         payload["compute"] = "local"
     return payload
@@ -395,6 +397,34 @@ def _chains_to_csv_lines(chains: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _flat_hits_from_chain_payload(
+    chains: list[dict[str, Any]],
+    *,
+    source_prefix: str,
+) -> list[dict[str, Any]]:
+    """Build export hits from remote chain JSON (mirrors chains_to_flat_event_hits)."""
+    hits: list[dict[str, Any]] = []
+    for chain_index, chain in enumerate(chains):
+        video_id = chain.get("video_id")
+        chain_score = float(chain.get("score") or 0.0)
+        for event in chain.get("events") or []:
+            event_score = float(event.get("score") or 0.0)
+            hits.append(
+                {
+                    "video_id": video_id,
+                    "score": chain_score - chain_index * 0.01 + event_score * 0.001,
+                    "source": f"{source_prefix}:{event.get('event_id')}",
+                    "frame_index": event.get("frame_index"),
+                    "timestamp_sec": event.get("timestamp_sec"),
+                    "text": event.get("text"),
+                    "keyframe_path": event.get("keyframe_path"),
+                    "image_url": event.get("image_url"),
+                    "video_url": event.get("video_url") or chain.get("video_url"),
+                }
+            )
+    return hits
+
+
 def _kis_submission_rows(raw: list[Any]) -> list[tuple[str, int]]:
     rows: list[tuple[str, int]] = []
     for item in raw:
@@ -409,6 +439,12 @@ def _kis_submission_rows(raw: list[Any]) -> list[tuple[str, int]]:
 def kis_search(body: KisRequest):
     try:
         if settings.uses_remote_compute:
+            logger.info(
+                "KIS → Colab worker_url=%s public=%s limit=%s",
+                settings.colab_worker_url,
+                settings.uses_public_worker,
+                body.limit,
+            )
             payload = _get_remote_gateway().kis(body.query, limit=body.limit)
             payload = _enrich_chains(payload)
             payload["hits"] = _enrich_search_payload({"hits": payload.get("hits") or []})["hits"]
@@ -444,6 +480,12 @@ def kis_search(body: KisRequest):
 def answer_question(body: QARequest):
     try:
         if settings.uses_remote_compute:
+            logger.info(
+                "QA → Colab worker_url=%s public=%s limit=%s",
+                settings.colab_worker_url,
+                settings.uses_public_worker,
+                body.limit,
+            )
             payload = _get_remote_gateway().qa(
                 body.question,
                 limit=body.limit,
@@ -568,8 +610,16 @@ def _qa_rows_to_csv(rows: list[tuple[str, int, str]]) -> str:
 def trake_search(body: TrakeRequest):
     try:
         if settings.uses_remote_compute:
+            logger.info(
+                "TRAKE → Colab worker_url=%s public=%s top_chains=%s",
+                settings.colab_worker_url,
+                settings.uses_public_worker,
+                body.top_chains,
+            )
             payload = _get_remote_gateway().trake(body.query, top_chains=body.top_chains)
             payload = _enrich_chains(payload)
+            flat_hits = _flat_hits_from_chain_payload(payload.get("chains") or [], source_prefix="trake")
+            payload["hits"] = _enrich_search_payload({"hits": flat_hits})["hits"]
             csv_lines = _chains_to_csv_lines(payload.get("chains") or [])
             if csv_lines:
                 payload["csv_text"] = "\n".join(csv_lines) + "\n"

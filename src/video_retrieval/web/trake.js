@@ -43,13 +43,65 @@ const lightbox = createLightboxController({
   closeBtn: document.getElementById("lightbox-close"),
   openVideoBtn: document.getElementById("lightbox-open-video"),
 });
-lightbox.bind();
 
 /** @type {Array<{event_id: string, frame_index: number, image_url?: string, video_url?: string, timestamp_sec?: number}>} */
 let selectedEvents = [];
 /** @type {Array<Record<string, unknown>>} */
 let lastChains = [];
 let lastPlan = null;
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const query = queryEl.value.trim();
+  if (!query) {
+    status.set("Paste a TRAKE query with E1…En events.", true);
+    return;
+  }
+  submitBtn.disabled = true;
+  status.set("Running TRAKE…");
+  resultsEl.hidden = true;
+  try {
+    const response = await fetch("/trake", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        top_chains: Number(topChainsEl.value),
+      }),
+    });
+    if (!response.ok) {
+      let detail = await response.text();
+      try {
+        const parsed = JSON.parse(detail);
+        detail = parsed.detail || detail;
+      } catch {
+        /* keep text */
+      }
+      throw new Error(detail || `TRAKE failed (${response.status})`);
+    }
+    const payload = await response.json();
+    resultsMetaEl.textContent = joinMeta([
+      `${(payload.chains || []).length} chains`,
+      `${(payload.hits || []).length} export rows`,
+      payload.csv_row ? `best ${payload.csv_row}` : null,
+    ]);
+    renderTrakeResults(payload);
+    if ((payload.chains || []).length) {
+      selectChain(payload.chains[0]);
+    } else {
+      editorEl.hidden = true;
+      selectedEvents = [];
+    }
+    status.set("TRAKE complete — review chains, edit frames if needed, export.");
+  } catch (error) {
+    resultsEl.hidden = true;
+    status.set(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+lightbox.bind();
 
 function syncEditorFromSelection() {
   editorEl.hidden = selectedEvents.length === 0;
@@ -247,51 +299,6 @@ async function importSubmissionCsv(file) {
     importCsvEl.value = "";
   }
 }
-
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const query = queryEl.value.trim();
-  if (!query) {
-    status.set("Paste a TRAKE query with E1…En events.", true);
-    return;
-  }
-  submitBtn.disabled = true;
-  status.set("Running TRAKE…");
-  resultsEl.hidden = true;
-  try {
-    const response = await fetch("/trake", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query,
-        top_chains: Number(topChainsEl.value),
-      }),
-    });
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(detail || `TRAKE failed (${response.status})`);
-    }
-    const payload = await response.json();
-    resultsMetaEl.textContent = joinMeta([
-      `${(payload.chains || []).length} chains`,
-      `${(payload.hits || []).length} export rows`,
-      payload.csv_row ? `best ${payload.csv_row}` : null,
-    ]);
-    renderTrakeResults(payload);
-    if ((payload.chains || []).length) {
-      selectChain(payload.chains[0]);
-    } else {
-      editorEl.hidden = true;
-      selectedEvents = [];
-    }
-    status.set("TRAKE complete — review chains, edit frames if needed, export.");
-  } catch (error) {
-    resultsEl.hidden = true;
-    status.set(error instanceof Error ? error.message : String(error), true);
-  } finally {
-    submitBtn.disabled = false;
-  }
-});
 
 exportBtn.addEventListener("click", exportCsv);
 importBtn.addEventListener("click", () => openCsvFilePicker(importCsvEl));

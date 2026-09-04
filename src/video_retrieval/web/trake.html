@@ -31,7 +31,7 @@
           <code>video_id,frame_E1,…,frame_En[,time_E1,…]</code>.
         </p>
 
-        <form id="trake-form" class="search-form" autocomplete="off">
+        <form id="trake-form" class="search-form" autocomplete="off" onsubmit="return false;">
           <label class="sr-only" for="query">TRAKE query</label>
           <textarea
             id="query"
@@ -53,21 +53,23 @@
             </label>
             <label class="field">
               <span>Results</span>
-              <select id="top-chains">
+              <select id="top-chains" name="top_chains">
                 <option value="10">10</option>
                 <option value="24" selected>24</option>
                 <option value="100">100</option>
               </select>
             </label>
-            <button type="submit" id="submit-btn">Run TRAKE</button>
-            <button type="button" id="import-btn" class="import-btn">Import CSV</button>
-            <input
-              id="import-csv"
-              type="file"
-              accept=".csv,text/csv"
-              hidden
-            />
-            <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+            <div class="controls-actions">
+              <button type="submit" id="submit-btn">Run TRAKE</button>
+              <button type="button" id="import-btn" class="import-btn">Import CSV</button>
+              <input
+                id="import-csv"
+                type="file"
+                accept=".csv,text/csv"
+                hidden
+              />
+              <button type="button" id="export-btn" class="export-btn">Export CSV</button>
+            </div>
           </div>
         </form>
       </header>

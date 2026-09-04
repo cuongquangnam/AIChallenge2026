@@ -239,6 +239,14 @@ textarea:focus {
   margin-top: 0.9rem;
 }
 
+.controls-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+  margin-left: auto;
+}
+
 .field {
   display: grid;
   gap: 0.35rem;
@@ -269,8 +277,10 @@ select {
   color: var(--ink);
 }
 
-button[type="submit"] {
-  margin-left: auto;
+button.primary-action,
+button[type="submit"],
+#submit-btn {
+  margin-left: 0;
   border: 0;
   border-radius: 999px;
   padding: 0.75rem 1.35rem;
@@ -281,12 +291,16 @@ button[type="submit"] {
   transition: transform 0.15s ease, filter 0.15s ease;
 }
 
-button[type="submit"]:hover:not(:disabled) {
+button.primary-action:hover:not(:disabled),
+button[type="submit"]:hover:not(:disabled),
+#submit-btn:hover:not(:disabled) {
   transform: translateY(-1px);
   filter: brightness(1.05);
 }
 
-button[type="submit"]:disabled {
+button.primary-action:disabled,
+button[type="submit"]:disabled,
+#submit-btn:disabled {
   opacity: 0.65;
   cursor: wait;
 }
@@ -742,9 +756,20 @@ button[type="submit"]:disabled {
     padding-top: 2rem;
   }
 
-  button[type="submit"] {
+  button.primary-action,
+  button[type="submit"],
+  #submit-btn {
     margin-left: 0;
     width: 100%;
+  }
+
+  .controls-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .controls-actions > * {
+    flex: 1 1 auto;
   }
 
   .results-head {
