@@ -70,6 +70,38 @@ def test_extract_keyframes_zip_flattens_nested_dir(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_extract_flattens_data_transnet_keyframes_prefix(tmp_path: Path) -> None:
+    """Laptop zips often embed data_transnet/keyframes/VIDEO/... paths."""
+    keyframes_dir = tmp_path / "keyframes"
+    keyframes_dir.mkdir()
+    zip_path = keyframes_dir / "keyframes.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr(
+            "data_transnet/keyframes/L26_V426/shot_0023_start.jpg",
+            b"jpg",
+        )
+
+    result = extract_keyframes_zip(keyframes_dir, progress=False)
+    assert result["action"] == "extracted"
+    assert (keyframes_dir / "L26_V426" / "shot_0023_start.jpg").is_file()
+    assert not (keyframes_dir / "data_transnet").exists()
+
+
+@pytest.mark.unit
+def test_normalize_hoists_already_extracted_nested_layout(tmp_path: Path) -> None:
+    from video_retrieval.storage.post_pull import normalize_keyframes_layout
+
+    keyframes_dir = tmp_path / "keyframes"
+    nested = keyframes_dir / "data_transnet" / "keyframes" / "L26_V426"
+    nested.mkdir(parents=True)
+    (nested / "shot_0023_start.jpg").write_bytes(b"jpg")
+
+    hoisted = normalize_keyframes_layout(keyframes_dir, progress=False)
+    assert hoisted == 1
+    assert (keyframes_dir / "L26_V426" / "shot_0023_start.jpg").is_file()
+
+
+@pytest.mark.unit
 def test_extract_keyframes_zip_skips_when_already_present(tmp_path: Path) -> None:
     keyframes_dir = tmp_path / "keyframes"
     video_dir = keyframes_dir / "L21_V001"

@@ -34,6 +34,16 @@ def prepare_colab_data(
         zip_paths=zip_paths or None,
         progress=progress,
     )
+    # Always normalize — zip may have been extracted earlier with nested
+    # data_transnet/keyframes/… layout.
+    hoisted = normalize_keyframes_layout(settings.keyframes_dir, progress=progress)
+    if hoisted:
+        keyframes_result = {
+            **keyframes_result,
+            "normalized": True,
+            "hoisted_dirs": hoisted,
+            "video_dirs": len(_video_subdirs(settings.keyframes_dir)),
+        }
     summary["keyframes"] = keyframes_result
 
     qdrant_result, qdrant_url = prepare_colab_qdrant(settings, progress=progress)
@@ -60,6 +70,9 @@ def extract_keyframes_zip(
     skipped unless ``force=True`` (re-extracting tens of GB is expensive).
     """
     keyframes_dir.mkdir(parents=True, exist_ok=True)
+    # Fix prior bad extracts (e.g. data_transnet/keyframes/…) before skip check.
+    normalize_keyframes_layout(keyframes_dir, progress=progress)
+
     resolved_zips = list(zip_paths) if zip_paths is not None else _find_keyframes_zips(keyframes_dir)
     video_dirs = _video_subdirs(keyframes_dir)
     if video_dirs and not force:
@@ -108,12 +121,13 @@ def extract_keyframes_zip(
                     )
                     last_log = now
 
-    _flatten_nested_keyframes_dir(keyframes_dir)
+    hoisted = normalize_keyframes_layout(keyframes_dir, progress=progress)
     video_dirs = _video_subdirs(keyframes_dir)
     if progress:
         print(
             f"[keyframes] extracted {total_members} member(s); "
-            f"{len(video_dirs)} video folder(s) under {keyframes_dir}",
+            f"{len(video_dirs)} video folder(s) under {keyframes_dir}"
+            + (f"; hoisted {hoisted} nested dir(s)" if hoisted else ""),
             flush=True,
         )
     return {
@@ -121,6 +135,7 @@ def extract_keyframes_zip(
         "zips": [path.name for path in resolved_zips],
         "members": total_members,
         "video_dirs": len(video_dirs),
+        "hoisted_dirs": hoisted,
         "dest": str(keyframes_dir),
     }
 
@@ -205,6 +220,22 @@ def _find_keyframes_zips(keyframes_dir: Path) -> list[Path]:
     return zips
 
 
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _looks_like_video_keyframe_dir(path: Path) -> bool:
+    """True if ``path`` is a per-video folder of JPG keyframes (not a nesting wrapper)."""
+    if not path.is_dir():
+        return False
+    try:
+        for child in path.iterdir():
+            if child.is_file() and child.suffix.lower() in _IMAGE_SUFFIXES:
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def _video_subdirs(keyframes_dir: Path) -> list[Path]:
     ignored = {"__MACOSX"}
     if not keyframes_dir.is_dir():
@@ -212,15 +243,92 @@ def _video_subdirs(keyframes_dir: Path) -> list[Path]:
     return [
         path
         for path in keyframes_dir.iterdir()
-        if path.is_dir() and path.name not in ignored and not path.name.startswith(".")
+        if path.is_dir()
+        and path.name not in ignored
+        and not path.name.startswith(".")
+        and _looks_like_video_keyframe_dir(path)
     ]
+
+
+def normalize_keyframes_layout(keyframes_dir: Path, *, progress: bool = False) -> int:
+    """Hoist nested video folders up to ``keyframes_dir``.
+
+    Handles zip layouts like:
+    - ``keyframes/L01_V001/...``
+    - ``data_transnet/keyframes/L01_V001/...``
+    - ``data/keyframes/L01_V001/...``
+    """
+    if not keyframes_dir.is_dir():
+        return 0
+    root = keyframes_dir.resolve()
+    hoisted = 0
+
+    for _ in range(6):
+        nested_markers = sorted(
+            (
+                path
+                for path in keyframes_dir.rglob("keyframes")
+                if path.is_dir() and path.resolve() != root
+            ),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        )
+        changed = False
+        for nested in nested_markers:
+            try:
+                children = list(nested.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                if not child.is_dir():
+                    continue
+                if child.name.startswith(".") or child.name == "__MACOSX":
+                    continue
+                if not _looks_like_video_keyframe_dir(child):
+                    continue
+                target = keyframes_dir / child.name
+                if target.exists():
+                    continue
+                if progress:
+                    print(
+                        f"[keyframes] hoist {child.relative_to(keyframes_dir)} "
+                        f"-> {child.name}",
+                        flush=True,
+                    )
+                child.rename(target)
+                hoisted += 1
+                changed = True
+            _remove_empty_parents(nested, stop=keyframes_dir)
+        if not changed:
+            break
+
+    # One more pass: direct child wrapper named keyframes/
+    _flatten_nested_keyframes_dir(keyframes_dir)
+    return hoisted
+
+
+def _remove_empty_parents(path: Path, *, stop: Path) -> None:
+    current = path
+    stop_resolved = stop.resolve()
+    for _ in range(8):
+        try:
+            resolved = current.resolve()
+        except OSError:
+            break
+        if resolved == stop_resolved or not current.is_dir():
+            break
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
 
 
 def _flatten_nested_keyframes_dir(keyframes_dir: Path) -> None:
     nested = keyframes_dir / "keyframes"
     if not nested.is_dir() or nested.resolve() == keyframes_dir.resolve():
         return
-    for child in nested.iterdir():
+    for child in list(nested.iterdir()):
         target = keyframes_dir / child.name
         if target.exists():
             continue

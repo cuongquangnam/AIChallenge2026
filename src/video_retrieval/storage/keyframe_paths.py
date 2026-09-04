@@ -85,6 +85,11 @@ def resolve_keyframe_path(
     candidates: list[Path] = []
     if video_id and name:
         candidates.append(settings.keyframes_dir / video_id / name)
+        # Zip often contains data_transnet/keyframes/... before normalize.
+        candidates.append(
+            settings.keyframes_dir / "data_transnet" / "keyframes" / video_id / name
+        )
+        candidates.append(settings.keyframes_dir / "data" / "keyframes" / video_id / name)
     if name:
         candidates.append(settings.keyframes_dir / name)
     candidates.append(settings.data_dir / raw)
