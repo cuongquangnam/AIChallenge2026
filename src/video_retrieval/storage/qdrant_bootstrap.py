@@ -14,10 +14,11 @@ from qdrant_client import QdrantClient
 
 logger = logging.getLogger(__name__)
 
-# Keep the server within ±1 minor of the installed qdrant-client (Colab often has 1.19.x).
-# Prefer the musl (static) Linux binary: the gnu build needs glibc ≥ 2.38, but Colab
-# is still Ubuntu 22.04 (glibc 2.35) and fails with GLIBC_2.38 not found.
-QDRANT_VERSION = "1.19.0"
+# Match docker-compose / snapshot export version (v1.12.5). Recovering a 1.12.x
+# snapshot on 1.16+ GitHub Linux binaries fails with "Failed to read segment state"
+# (RocksDB / on_disk payload format not enabled in those builds).
+# Prefer the musl (static) Linux binary: the gnu build needs a newer glibc than Colab.
+QDRANT_VERSION = "1.12.5"
 QDRANT_ARTIFACT = "qdrant-x86_64-unknown-linux-musl.tar.gz"
 QDRANT_DOWNLOAD_URL = (
     f"https://github.com/qdrant/qdrant/releases/download/v{QDRANT_VERSION}/{QDRANT_ARTIFACT}"
