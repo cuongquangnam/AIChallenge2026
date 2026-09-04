@@ -13,11 +13,14 @@ from qdrant_client import QdrantClient
 logger = logging.getLogger(__name__)
 
 # Keep the server within ±1 minor of the installed qdrant-client (Colab often has 1.19.x).
+# Prefer the musl (static) Linux binary: the gnu build needs glibc ≥ 2.38, but Colab
+# is still Ubuntu 22.04 (glibc 2.35) and fails with GLIBC_2.38 not found.
 QDRANT_VERSION = "1.19.0"
-QDRANT_ARTIFACT = "qdrant-x86_64-unknown-linux-gnu.tar.gz"
+QDRANT_ARTIFACT = "qdrant-x86_64-unknown-linux-musl.tar.gz"
 QDRANT_DOWNLOAD_URL = (
     f"https://github.com/qdrant/qdrant/releases/download/v{QDRANT_VERSION}/{QDRANT_ARTIFACT}"
 )
+QDRANT_VERSION_STAMP = f"{QDRANT_VERSION}-musl"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 
 
@@ -67,8 +70,12 @@ def ensure_qdrant_server(
     storage_path.mkdir(parents=True, exist_ok=True)
 
     binary = install_dir / "qdrant"
-    version_stamp = install_dir / f".qdrant-version-{QDRANT_VERSION}"
-    needs_install = not binary.is_file() or not version_stamp.is_file()
+    version_stamp = install_dir / f".qdrant-version-{QDRANT_VERSION_STAMP}"
+    needs_install = (
+        not binary.is_file()
+        or not version_stamp.is_file()
+        or not _binary_is_runnable(binary)
+    )
 
     if is_qdrant_ready(url) and not needs_install:
         logger.info("Qdrant already running at %s", url)
@@ -77,7 +84,8 @@ def ensure_qdrant_server(
 
     if is_qdrant_ready(url) and needs_install:
         print(
-            f"[qdrant] outdated server is running; stop it before upgrading to {QDRANT_VERSION}",
+            f"[qdrant] outdated server is running; stop it before upgrading to "
+            f"{QDRANT_VERSION_STAMP}",
             flush=True,
         )
         _stop_qdrant_on_port(6333)
@@ -90,11 +98,19 @@ def ensure_qdrant_server(
         )
 
     if needs_install:
-        print(f"[qdrant] downloading Qdrant {QDRANT_VERSION} ...", flush=True)
+        print(
+            f"[qdrant] downloading Qdrant {QDRANT_VERSION} ({QDRANT_ARTIFACT}) ...",
+            flush=True,
+        )
         _download_qdrant_binary(install_dir)
+        if not _binary_is_runnable(binary):
+            raise RuntimeError(
+                f"Downloaded Qdrant binary is not runnable on this host ({binary}). "
+                "Colab/Ubuntu 22.04 needs the musl build; re-check QDRANT_ARTIFACT."
+            )
         for stale in install_dir.glob(".qdrant-version-*"):
             stale.unlink(missing_ok=True)
-        version_stamp.write_text(QDRANT_VERSION + "\n", encoding="utf-8")
+        version_stamp.write_text(QDRANT_VERSION_STAMP + "\n", encoding="utf-8")
         print(f"[qdrant] installed to {binary}", flush=True)
 
     if is_qdrant_ready(url):
@@ -254,11 +270,33 @@ def _can_run_qdrant_binary() -> bool:
     return platform.system() == "Linux" and machine in {"x86_64", "amd64"}
 
 
+def _binary_is_runnable(binary: Path) -> bool:
+    """True when ``binary`` executes (catches glibc mismatches before long waits)."""
+    if not binary.is_file():
+        return False
+    try:
+        result = subprocess.run(
+            [str(binary), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    combined = f"{result.stdout}\n{result.stderr}"
+    if "GLIBC_" in combined and "not found" in combined:
+        return False
+    # --help may exit non-zero on some builds; treat spawn success as enough.
+    return result.returncode in {0, 1, 2} or "Usage" in combined or "qdrant" in combined.lower()
+
+
 def _download_qdrant_binary(install_dir: Path) -> None:
     archive_path = install_dir / QDRANT_ARTIFACT
-    if not archive_path.is_file():
-        logger.info("Downloading Qdrant %s", QDRANT_VERSION)
-        urllib.request.urlretrieve(QDRANT_DOWNLOAD_URL, archive_path)
+    # Always re-fetch when installing so a stale gnu tarball cannot be reused.
+    archive_path.unlink(missing_ok=True)
+    logger.info("Downloading Qdrant %s from %s", QDRANT_VERSION, QDRANT_DOWNLOAD_URL)
+    urllib.request.urlretrieve(QDRANT_DOWNLOAD_URL, archive_path)
 
     with tarfile.open(archive_path, "r:gz") as archive:
         archive.extractall(path=install_dir)
