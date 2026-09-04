@@ -125,7 +125,7 @@ def prepare_colab_qdrant(
 
     from qdrant_client import QdrantClient
 
-    client = QdrantClient(url=DEFAULT_QDRANT_URL)
+    client = QdrantClient(url=DEFAULT_QDRANT_URL, check_compatibility=False)
     if collection_has_points(client, collection):
         count = int(client.get_collection(collection).points_count or 0)
         return {

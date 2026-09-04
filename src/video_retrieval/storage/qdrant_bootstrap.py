@@ -14,11 +14,12 @@ from qdrant_client import QdrantClient
 
 logger = logging.getLogger(__name__)
 
-# Match docker-compose / snapshot export version (v1.12.5). Recovering a 1.12.x
-# snapshot on 1.16+ GitHub Linux binaries fails with "Failed to read segment state"
-# (RocksDB / on_disk payload format not enabled in those builds).
-# Prefer the musl (static) Linux binary: the gnu build needs a newer glibc than Colab.
-QDRANT_VERSION = "1.12.5"
+# Colab needs the musl (static) Linux build: gnu needs glibc ≥ 2.38, Colab is 2.35.
+# Snapshots exported from Qdrant ≤1.12 (RocksDB / payload_storage_type=on_disk) cannot be
+# recovered by GitHub Linux binaries ≥1.17. Migrate first with Docker 1.16.3 → 1.19:
+#   scripts/colab/migrate_qdrant_snapshot_for_colab.sh
+# Then recover with this 1.19.0 server. Client may stay 1.19.x (check_compatibility=False).
+QDRANT_VERSION = "1.19.0"
 QDRANT_ARTIFACT = "qdrant-x86_64-unknown-linux-musl.tar.gz"
 QDRANT_DOWNLOAD_URL = (
     f"https://github.com/qdrant/qdrant/releases/download/v{QDRANT_VERSION}/{QDRANT_ARTIFACT}"
