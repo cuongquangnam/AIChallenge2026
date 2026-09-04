@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import pwd
+import shutil
 import subprocess
 import tarfile
 import time
@@ -61,6 +62,14 @@ def ensure_elasticsearch(
     install_dir.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
     es_home = install_dir / f"elasticsearch-{ES_VERSION}"
+
+    if es_home.is_dir() and _jdk_crypto_policies_corrupted(es_home):
+        print(
+            "[es] JDK crypto policies were corrupted by an earlier Colab patch; re-extracting ES...",
+            flush=True,
+        )
+        shutil.rmtree(es_home)
+
     if not (es_home / "bin" / "elasticsearch").is_file():
         print(f"[es] downloading Elasticsearch {ES_VERSION} ...", flush=True)
         with Heartbeat("[es]", interval_sec=20.0, message="downloading/extracting Elasticsearch…"):
@@ -163,31 +172,46 @@ def ensure_elasticsearch(
     )
 
 
+def _jdk_crypto_policies_corrupted(es_home: Path) -> bool:
+    """True when an earlier patch wrote into JDK jurisdiction policy files."""
+    jdk_security = es_home / "jdk" / "conf" / "security"
+    if not jdk_security.is_dir():
+        return False
+    for policy in jdk_security.rglob("*.policy"):
+        try:
+            if _COLAB_POLICY_MARKER in policy.read_text(encoding="utf-8", errors="replace"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _apply_colab_cgroup_policy(es_home: Path) -> Path:
-    """Grant Java file reads so OsProbe can open Colab's jupyter-children cgroup paths."""
+    """Grant Java file reads so OsProbe can open Colab's jupyter-children cgroup paths.
+
+    Never modify ``jdk/conf/security/**`` — those jurisdiction policy files must stay
+    pristine or JCE fails with \"Couldn't parse jurisdiction policy files\".
+    """
     config_dir = es_home / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     policy_path = config_dir / "colab-cgroup.policy"
     grant_block = f"// {_COLAB_POLICY_MARKER}\n{_COLAB_CGROUP_POLICY.strip()}\n"
     policy_path.write_text(grant_block, encoding="utf-8")
 
-    policy_targets = list(es_home.rglob("*.policy"))
-    bundled_java_policy = es_home / "jdk" / "conf" / "security" / "java.policy"
-    if bundled_java_policy.is_file():
-        policy_targets.append(bundled_java_policy)
-
-    for policy in policy_targets:
-        try:
-            text = policy.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if _COLAB_POLICY_MARKER in text:
-            continue
-        try:
-            with policy.open("a", encoding="utf-8") as handle:
-                handle.write("\n" + grant_block)
-        except OSError:
-            continue
+    modules_dir = es_home / "modules"
+    if modules_dir.is_dir():
+        for policy in modules_dir.rglob("plugin-security.policy"):
+            try:
+                text = policy.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _COLAB_POLICY_MARKER in text:
+                continue
+            try:
+                with policy.open("a", encoding="utf-8") as handle:
+                    handle.write("\n" + grant_block)
+            except OSError:
+                continue
 
     jvm_dir = config_dir / "jvm.options.d"
     jvm_dir.mkdir(parents=True, exist_ok=True)
@@ -224,7 +248,8 @@ def _download_and_extract(install_dir: Path) -> None:
     logger.info("Extracting Elasticsearch to %s", install_dir)
     with tarfile.open(archive_path, "r:gz") as archive:
         archive.extractall(path=install_dir)
-    archive_path.unlink(missing_ok=True)
+    # Keep the tarball so a later repair re-extract does not re-download ~600MB.
+    # Callers that wiped es_home can extract again from the cached archive.
 
 
 def find_es_ndjson_export(data_dir: Path, es_index: str) -> Path | None:
