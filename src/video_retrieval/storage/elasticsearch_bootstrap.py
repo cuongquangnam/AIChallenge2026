@@ -74,6 +74,10 @@ def ensure_elasticsearch(
         f"path.logs={log_dir}",
         "-E",
         "xpack.security.enabled=false",
+        # Colab's cgroup path (/sys/fs/cgroup/../../jupyter-children/...) is denied by
+        # the Java SecurityManager; ML plugin probes it at boot and crashes ES.
+        "-E",
+        "xpack.ml.enabled=false",
         "-E",
         "network.host=127.0.0.1",
         "-E",
@@ -83,8 +87,19 @@ def ensure_elasticsearch(
     ]
     env = os.environ.copy()
     env["ES_JAVA_OPTS"] = java_opts
+    # Drop notebook/Colab overrides that point ES at a custom conf + broken cgroup probes.
+    env.pop("ES_PATH_CONF", None)
     if run_as_root:
-        cmd = ["sudo", "-u", ES_RUNTIME_USER, "env", f"ES_JAVA_OPTS={java_opts}", *cmd]
+        cmd = [
+            "sudo",
+            "-u",
+            ES_RUNTIME_USER,
+            "env",
+            "-u",
+            "ES_PATH_CONF",
+            f"ES_JAVA_OPTS={java_opts}",
+            *cmd,
+        ]
     print(f"[es] starting Elasticsearch (timeout={startup_timeout_sec:.0f}s) ...", flush=True)
     print(f"[es] logs: {bootstrap_log}", flush=True)
     with bootstrap_log.open("ab") as log_handle:
@@ -93,7 +108,7 @@ def ensure_elasticsearch(
         proc = subprocess.Popen(
             cmd,
             cwd=str(es_home),
-            env=env,
+            env=None if run_as_root else env,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             start_new_session=True,
