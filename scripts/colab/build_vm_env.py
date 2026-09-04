@@ -12,7 +12,13 @@ VM_KEYS = (
     "GEMINI_RPM",
     "GEMINI_MAX_RETRIES",
     "GEMINI_BATCH_SIZE",
+    "LLM_BACKEND",
+    "QA_LLM_BACKEND",
     "QUERY_PLANNER",
+    "QWEN_VL_MODEL_ID",
+    "QWEN_VL_DTYPE",
+    "QWEN_VL_DEVICE",
+    "QWEN_VL_MAX_NEW_TOKENS",
     "VISUAL_BACKEND",
     "OCR_BACKEND",
     "ASR_BACKEND",
@@ -46,8 +52,18 @@ def _parse_env(path: Path) -> dict[str, str]:
 
 def build_vm_env(*, source: Path, dest: Path) -> None:
     values = _parse_env(source)
-    if not values.get("GEMINI_API_KEY", "").strip():
-        raise SystemExit(f"GEMINI_API_KEY is required in {source}")
+    llm_backend = values.get("LLM_BACKEND", "auto").strip().lower()
+    qa_backend = values.get("QA_LLM_BACKEND", "auto").strip().lower()
+    uses_qwen = llm_backend in {"qwen_vl", "qwen", "qwen2_5_vl"} or qa_backend in {
+        "qwen_vl",
+        "qwen",
+        "qwen2_5_vl",
+    }
+    has_gemini = bool(values.get("GEMINI_API_KEY", "").strip())
+    if not has_gemini and not uses_qwen:
+        raise SystemExit(
+            f"Set GEMINI_API_KEY or LLM_BACKEND=qwen_vl in {source}"
+        )
 
     lines = [
         "# Colab VM env — uploaded from laptop .env. Do not commit.",

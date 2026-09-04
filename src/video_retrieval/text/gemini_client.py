@@ -59,9 +59,20 @@ class GeminiClient:
         json_response: bool = False,
         component: str = "gemini",
     ) -> str:
+        from video_retrieval.text.content_parts import load_pil_image, normalize_parts
+
+        gemini_parts: list[Any] = []
+        for part in normalize_parts(parts):
+            kind = part.get("type")
+            if kind == "text":
+                gemini_parts.append(self._types.Part.from_text(text=str(part.get("text") or "")))
+            elif kind == "image":
+                gemini_parts.append(self._types.Part(load_pil_image(part.get("image"))))
+            elif kind == "image_bytes":
+                gemini_parts.append(self._types.Part(load_pil_image(part.get("data"))))
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "contents": [self._types.Content(role="user", parts=parts)],
+            "contents": [self._types.Content(role="user", parts=gemini_parts)],
         }
         config = gemini_generate_config(self.model, json_response=json_response)
         if config is not None:

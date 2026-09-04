@@ -5,25 +5,32 @@ from pathlib import Path
 
 from video_retrieval.config import Settings
 from video_retrieval.models import FrameRole, KeyFrame, TextDocument
-from video_retrieval.text.gemini_client import GeminiClient, get_gemini_client
+from video_retrieval.text.content_parts import image_part, text_part
+from video_retrieval.text.llm import LLMClient
+from video_retrieval.text.llm_factory import get_llm_client
 
 
 class OCREngine:
-    """Gemini OCR with a mock backend for local development."""
+    """OCR via Gemini / Qwen VL, with a mock backend for local development."""
 
-    def __init__(self, settings: Settings, *, client: GeminiClient | None = None):
+    def __init__(self, settings: Settings, *, client: LLMClient | None = None):
         self.settings = settings
-        self.backend = settings.ocr_backend
+        self.backend = (settings.ocr_backend or "mock").strip().lower()
+        if self.backend in {"qwen", "qwen2_5_vl", "qwen2.5-vl"}:
+            self.backend = "qwen_vl"
         self._client = client
-        if self.backend == "gemini" and self._client is None:
-            self._client = get_gemini_client(settings)
+        if self.backend in {"gemini", "qwen_vl"} and self._client is None:
+            self._client = get_llm_client(settings, backend=self.backend)
             if self._client is None:
-                raise ValueError("GEMINI_API_KEY is required for OCR_BACKEND=gemini")
+                raise ValueError(
+                    f"OCR_BACKEND={self.backend} requires a working LLM "
+                    "(GEMINI_API_KEY for gemini, or local Qwen VL weights)"
+                )
 
     def extract_from_keyframes(self, keyframes: list[KeyFrame]) -> list[TextDocument]:
         ocr_keyframes = [kf for kf in keyframes if kf.role == FrameRole.MIDDLE]
-        if self.backend == "gemini":
-            return self._extract_gemini_keyframes(ocr_keyframes)
+        if self.backend in {"gemini", "qwen_vl"}:
+            return self._extract_llm_keyframes(ocr_keyframes)
 
         docs: list[TextDocument] = []
         for kf in ocr_keyframes:
@@ -33,7 +40,7 @@ class OCREngine:
             docs.append(self._to_text_document(kf, text))
         return docs
 
-    def _extract_gemini_keyframes(self, keyframes: list[KeyFrame]) -> list[TextDocument]:
+    def _extract_llm_keyframes(self, keyframes: list[KeyFrame]) -> list[TextDocument]:
         docs: list[TextDocument] = []
         batch_size = max(self.settings.gemini_batch_size, 1)
         batches = list(_chunked(keyframes, batch_size))
@@ -45,7 +52,7 @@ class OCREngine:
                 f"{len(batch)} frame(s), "
                 f"shots {batch[0].shot_index}-{batch[-1].shot_index}"
             )
-            text_by_image = self._extract_gemini_batch(batch)
+            text_by_image = self._extract_llm_batch(batch)
             for kf in batch:
                 text = text_by_image.get(kf.path.name, "")
                 if not text.strip():
@@ -54,28 +61,24 @@ class OCREngine:
         return docs
 
     def extract_text(self, image_path: Path) -> str:
-        if self.backend == "gemini":
-            return self._extract_gemini(image_path)
-        name = image_path.stem
-        if FrameRole.MIDDLE.value in name:
+        if self.backend in {"gemini", "qwen_vl"}:
+            return self._extract_llm(image_path)
+        if FrameRole.MIDDLE.value in image_path.name:
             return f"mock ocr text from {image_path.name}"
         return ""
 
-    def _extract_gemini_batch(self, keyframes: list[KeyFrame]) -> dict[str, str]:
-        from google.genai import types
+    def _extract_llm_batch(self, keyframes: list[KeyFrame]) -> dict[str, str]:
         from PIL import Image
 
         assert self._client is not None
         image_ids = [kf.path.name for kf in keyframes]
-        parts: list[types.Part] = [
-            types.Part.from_text(text=_batch_ocr_instructions(image_ids)),
-        ]
+        parts: list = [text_part(_batch_ocr_instructions(image_ids))]
         for kf in keyframes:
             image = Image.open(kf.path)
             if image.mode not in ("RGB", "L"):
                 image = image.convert("RGB")
-            parts.append(types.Part.from_text(text=f"[IMAGE: {kf.path.name}]"))
-            parts.append(types.Part(image))
+            parts.append(text_part(f"[IMAGE: {kf.path.name}]"))
+            parts.append(image_part(image))
 
         raw = self._client.generate_parts(
             parts,
@@ -84,8 +87,7 @@ class OCREngine:
         )
         return _parse_batch_ocr_response(raw, image_ids)
 
-    def _extract_gemini(self, image_path: Path) -> str:
-        from google.genai import types
+    def _extract_llm(self, image_path: Path) -> str:
         from PIL import Image
 
         assert self._client is not None
@@ -99,10 +101,7 @@ class OCREngine:
             "If there is no visible text, return an empty response."
         )
         return self._client.generate_parts(
-            [
-                types.Part.from_text(text=prompt),
-                types.Part(image),
-            ],
+            [text_part(prompt), image_part(image)],
             json_response=False,
             component="OCR frame",
         )
@@ -157,5 +156,5 @@ def _parse_batch_ocr_response(raw: str, image_ids: list[str]) -> dict[str, str]:
             continue
         image_id = item.get("image_id")
         if image_id in text_by_id:
-            text_by_id[image_id] = str(item.get("text") or "").strip()
+            text_by_id[image_id] = str(item.get("text") or "")
     return text_by_id

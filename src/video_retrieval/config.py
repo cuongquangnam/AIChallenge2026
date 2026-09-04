@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     beit3_dim: int = 768
 
     visual_backend: str = "mock"  # mock | real
-    ocr_backend: str = "mock"  # mock | gemini
+    ocr_backend: str = "mock"  # mock | gemini | qwen_vl
     asr_backend: str = "mock"  # mock | whisper
     shot_backend: str = "opencv"  # opencv | transnetv2
 
@@ -30,13 +30,19 @@ class Settings(BaseSettings):
     gemini_rpm: int = 5
     gemini_max_retries: int = 8
     gemini_batch_size: int = 10
-    query_planner: str = "auto"  # auto | gemini | heuristic
+    # Shared multimodal LLM: auto | gemini | qwen_vl | none
+    llm_backend: str = "auto"
+    qwen_vl_model_id: str = "Qwen/Qwen3-VL-32B-Instruct"
+    qwen_vl_dtype: str = "bf16"  # bf16 | fp16 | 4bit
+    qwen_vl_device: str = "auto"
+    qwen_vl_max_new_tokens: int = 2048
+    query_planner: str = "auto"  # auto | gemini | qwen_vl | heuristic
     whisper_model: str = "base"
     siglip_model_id: str = "google/siglip-base-patch16-224"
     beit3_model_id: str = "microsoft/beit-base-patch16-224"
 
-    # Q&A uses Gemini by default (same GEMINI_API_KEY as OCR / planner).
-    qa_llm_backend: str = "gemini"  # gemini | none
+    # Q&A multimodal backend: auto (follow llm_backend) | gemini | qwen_vl | none
+    qa_llm_backend: str = "auto"
     qa_retrieval_limit: int = 50
     qa_group_count: int = 6
     qa_frame_radius: int = 2
@@ -156,10 +162,16 @@ class Settings(BaseSettings):
             "ocr_backend": self.ocr_backend,
             "asr_backend": self.asr_backend,
             "query_planner": self.query_planner,
+            "llm_backend": self.llm_backend,
+            "qa_llm_backend": self.qa_llm_backend,
             "gemini_model": self.gemini_model,
             "gemini_rpm": self.gemini_rpm,
             "gemini_max_retries": self.gemini_max_retries,
             "gemini_batch_size": self.gemini_batch_size,
+            "qwen_vl_model_id": self.qwen_vl_model_id,
+            "qwen_vl_dtype": self.qwen_vl_dtype,
+            "qwen_vl_device": self.qwen_vl_device,
+            "qwen_vl_max_new_tokens": self.qwen_vl_max_new_tokens,
             "whisper_model": self.whisper_model,
             "siglip_model_id": self.siglip_model_id,
             "beit3_model_id": self.beit3_model_id,

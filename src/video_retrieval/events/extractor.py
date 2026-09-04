@@ -8,9 +8,9 @@ from typing import Literal
 
 from video_retrieval.config import Settings, get_settings
 from video_retrieval.models import EventChainPlan, EventSpec
-from video_retrieval.text.gemini_client import get_gemini_client
 from video_retrieval.text.gemini_logging import log_gemini_failure
 from video_retrieval.text.llm import LLMClient
+from video_retrieval.text.llm_factory import get_llm_client, resolve_llm_backend
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +86,19 @@ class EventChainExtractor:
     ):
         self.settings = settings or get_settings()
         self._llm = llm
-        if self._llm is None and self.settings.gemini_api_key:
-            if self.settings.query_planner != "heuristic":
-                self._llm = get_gemini_client(self.settings)
+        if self._llm is None and self.settings.query_planner != "heuristic":
+            backend = resolve_llm_backend(self.settings)
+            if self.settings.query_planner.strip().lower() in {
+                "qwen",
+                "qwen_vl",
+                "qwen2_5_vl",
+                "qwen2.5-vl",
+            }:
+                backend = "qwen_vl"
+            elif self.settings.query_planner.strip().lower() == "gemini":
+                backend = "gemini"
+            if backend in {"gemini", "qwen_vl"}:
+                self._llm = get_llm_client(self.settings, backend=backend)
 
     def extract(
         self,
@@ -102,18 +112,18 @@ class EventChainExtractor:
 
         if self._llm is not None:
             try:
-                return self._extract_gemini(query, task=task)
+                return self._extract_with_llm(query, task=task)
             except Exception as exc:
                 log_gemini_failure(
                     component=f"{task} event extractor",
-                    model=self.settings.gemini_model,
+                    model=getattr(self._llm, "model", "llm"),
                     exc=exc,
                     query=query,
                     fallback="heuristic event split",
                 )
         return heuristic_event_plan(query, task=task)
 
-    def _extract_gemini(
+    def _extract_with_llm(
         self,
         query: str,
         *,

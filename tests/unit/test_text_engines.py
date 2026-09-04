@@ -49,11 +49,11 @@ def test_extract_from_keyframes_only_processes_middle_frames(
     settings.gemini_api_key = "test-key"
     called_batches: list[list[str]] = []
 
-    def fake_extract_gemini_batch(self, keyframes: list[KeyFrame]) -> dict[str, str]:
+    def fake_extract_llm_batch(self, keyframes: list[KeyFrame]) -> dict[str, str]:
         called_batches.append([kf.path.name for kf in keyframes])
         return {kf.path.name: "ocr text" for kf in keyframes}
 
-    monkeypatch.setattr(OCREngine, "_extract_gemini_batch", fake_extract_gemini_batch)
+    monkeypatch.setattr(OCREngine, "_extract_llm_batch", fake_extract_llm_batch)
 
     ocr = _mock_ocr_engine(settings)
     middle = KeyFrame(
@@ -86,11 +86,11 @@ def test_extract_from_keyframes_batches_gemini_requests(
     settings.gemini_batch_size = 2
     called_batches: list[list[str]] = []
 
-    def fake_extract_gemini_batch(self, keyframes: list[KeyFrame]) -> dict[str, str]:
+    def fake_extract_llm_batch(self, keyframes: list[KeyFrame]) -> dict[str, str]:
         called_batches.append([kf.path.name for kf in keyframes])
         return {kf.path.name: f"text from {kf.path.name}" for kf in keyframes}
 
-    monkeypatch.setattr(OCREngine, "_extract_gemini_batch", fake_extract_gemini_batch)
+    monkeypatch.setattr(OCREngine, "_extract_llm_batch", fake_extract_llm_batch)
 
     ocr = _mock_ocr_engine(settings)
     keyframes = [
@@ -156,7 +156,7 @@ def test_gemini_generation_config_skips_older_models() -> None:
 def test_gemini_ocr_requires_api_key(settings: Settings) -> None:
     settings.ocr_backend = "gemini"
     settings.gemini_api_key = ""
-    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+    with pytest.raises(ValueError, match="OCR_BACKEND=gemini"):
         OCREngine(settings)
 
 

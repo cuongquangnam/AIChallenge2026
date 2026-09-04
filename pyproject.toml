@@ -28,9 +28,11 @@ dependencies = [
 [project.optional-dependencies]
 ml = [
   "torch>=2.4.0",
-  "transformers>=4.45.0",
+  "transformers>=4.57.0",
+  "accelerate>=0.34.0",
   "openai-whisper>=20240930",
   "google-genai>=1.0.0",
+  "bitsandbytes>=0.44.0",
 ]
 dev = [
   "pytest>=8.3.0",

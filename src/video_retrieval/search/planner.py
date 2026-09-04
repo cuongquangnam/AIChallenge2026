@@ -6,9 +6,9 @@ import re
 
 from video_retrieval.config import Settings
 from video_retrieval.models import QueryPlan
-from video_retrieval.text.gemini_client import get_gemini_client
 from video_retrieval.text.gemini_logging import log_gemini_failure
 from video_retrieval.text.llm import LLMClient
+from video_retrieval.text.llm_factory import get_llm_client, resolve_llm_backend
 
 logger = logging.getLogger(__name__)
 
@@ -41,39 +41,41 @@ class QueryPlanner:
         self.settings = settings
         self.backend = _planner_backend(settings)
         self._llm = llm
-        if self.backend == "gemini" and self._llm is None:
-            self._llm = get_gemini_client(settings)
-        if self.backend == "gemini" and self._llm is None:
+        if self.backend in {"gemini", "qwen_vl"} and self._llm is None:
+            self._llm = get_llm_client(settings, backend=self.backend)
+        if self.backend in {"gemini", "qwen_vl"} and self._llm is None:
             logger.warning(
-                "Gemini query planner disabled: GEMINI_API_KEY is empty; using heuristic plans"
+                "Query planner backend=%s unavailable; using heuristic plans",
+                self.backend,
             )
             self.backend = "heuristic"
-        elif self.backend == "gemini":
+        elif self.backend in {"gemini", "qwen_vl"}:
             logger.info(
-                "Gemini query planner ready (model=%s)",
-                self.settings.gemini_model,
+                "Query planner ready (backend=%s model=%s)",
+                self.backend,
+                getattr(self._llm, "model", self.backend),
             )
 
     def plan(self, query: str) -> QueryPlan:
         query = query.strip()
         if not query:
             return QueryPlan()
-        if self.backend != "gemini" or self._llm is None:
+        if self.backend == "heuristic" or self._llm is None:
             return heuristic_plan(query)
 
         try:
-            return self._plan_gemini(query)
+            return self._plan_with_llm(query)
         except Exception as exc:
             log_gemini_failure(
                 component="query planner",
-                model=self.settings.gemini_model,
+                model=getattr(self._llm, "model", self.backend),
                 exc=exc,
                 query=query,
                 fallback="heuristic plan (copy query to ocr/asr/visual)",
             )
             return heuristic_plan(query)
 
-    def _plan_gemini(self, query: str) -> QueryPlan:
+    def _plan_with_llm(self, query: str) -> QueryPlan:
         assert self._llm is not None
         raw = self._llm.generate_text(
             _PLAN_PROMPT.format(query=query),
@@ -83,9 +85,10 @@ class QueryPlanner:
         plan = parse_plan(raw, fallback_query=query)
         if not (plan.ocr or plan.asr or plan.visual):
             logger.warning(
-                "Gemini query planner returned empty channels (model=%s); "
+                "Query planner returned empty channels (backend=%s model=%s); "
                 "falling back to heuristic. raw_response=%r",
-                self.settings.gemini_model,
+                self.backend,
+                getattr(self._llm, "model", self.backend),
                 raw[:800],
             )
             return heuristic_plan(query)
@@ -123,8 +126,14 @@ def _planner_backend(settings: Settings) -> str:
     backend = (settings.query_planner or "auto").strip().lower()
     if backend == "heuristic":
         return "heuristic"
-    if backend in {"gemini", "auto"} and settings.gemini_api_key:
-        return "gemini"
+    if backend in {"qwen", "qwen2_5_vl", "qwen2.5-vl", "qwen_vl"}:
+        return "qwen_vl"
+    if backend == "gemini":
+        return "gemini" if settings.gemini_api_key else "heuristic"
+    # auto → follow shared llm_backend, else gemini key, else heuristic
+    shared = resolve_llm_backend(settings)
+    if shared in {"gemini", "qwen_vl"}:
+        return shared
     return "heuristic"
 
 
