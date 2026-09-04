@@ -32,10 +32,10 @@ def hydrate_elasticsearch_index(
     store = ElasticsearchStore(settings)
     ndjson_path = find_es_ndjson_export(settings.data_dir, settings.es_index)
     if ndjson_path is not None:
-    if progress:
-        print(f"[es] loading ndjson export: {ndjson_path}", flush=True)
-        print("[es] bulk import can take several minutes on Colab ...", flush=True)
-    imported = store.bulk_import_ndjson(ndjson_path, progress=progress)
+        if progress:
+            print(f"[es] loading ndjson export: {ndjson_path}", flush=True)
+            print("[es] bulk import can take several minutes on Colab ...", flush=True)
+        imported = store.bulk_import_ndjson(ndjson_path, progress=progress)
         return {"source": "ndjson", "imported": imported, "path": ndjson_path.name}
 
     if progress:
