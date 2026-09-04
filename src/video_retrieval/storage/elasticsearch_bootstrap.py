@@ -16,6 +16,16 @@ ES_ARTIFACT = f"elasticsearch-{ES_VERSION}-linux-x86_64.tar.gz"
 ES_DOWNLOAD_URL = f"https://artifacts.elastic.co/downloads/elasticsearch/{ES_ARTIFACT}"
 ES_RUNTIME_USER = "elasticsearch"
 
+# Colab resolves cgroup cpu.stat under paths like
+# /sys/fs/cgroup/../../jupyter-children/cpu.stat which escape the default
+# /sys/fs/cgroup/- Java grant and crash OsService at boot.
+_COLAB_CGROUP_POLICY = """
+grant {
+  permission java.io.FilePermission "<<ALL FILES>>", "read,readlink";
+};
+"""
+_COLAB_POLICY_MARKER = "AIChallenge2026-colab-cgroup-grant"
+
 
 def is_elasticsearch_ready(url: str, *, timeout: float = 1.0) -> bool:
     health_url = f"{url.rstrip('/')}/_cluster/health"
@@ -54,6 +64,9 @@ def ensure_elasticsearch(
         _download_and_extract(install_dir)
         print(f"[es] extracted to {es_home}", flush=True)
 
+    policy_path = _apply_colab_cgroup_policy(es_home)
+    print(f"[es] applied Colab cgroup Java policy at {policy_path}", flush=True)
+
     log_dir = data_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     bootstrap_log = log_dir / "bootstrap.out"
@@ -64,6 +77,9 @@ def ensure_elasticsearch(
         _chown_tree(es_home, ES_RUNTIME_USER)
         _chown_tree(data_dir, ES_RUNTIME_USER)
 
+    java_opts_full = (
+        f"{java_opts} -Djava.security.policy={policy_path.resolve().as_uri()}"
+    ).strip()
     cmd = [
         str(es_home / "bin" / "elasticsearch"),
         "-E",
@@ -74,8 +90,7 @@ def ensure_elasticsearch(
         f"path.logs={log_dir}",
         "-E",
         "xpack.security.enabled=false",
-        # Colab's cgroup path (/sys/fs/cgroup/../../jupyter-children/...) is denied by
-        # the Java SecurityManager; ML plugin probes it at boot and crashes ES.
+        # Avoid early ML boot probe; OsService still needs the Java policy above.
         "-E",
         "xpack.ml.enabled=false",
         "-E",
@@ -86,7 +101,7 @@ def ensure_elasticsearch(
         "ingest.geoip.downloader.enabled=false",
     ]
     env = os.environ.copy()
-    env["ES_JAVA_OPTS"] = java_opts
+    env["ES_JAVA_OPTS"] = java_opts_full
     # Drop notebook/Colab overrides that point ES at a custom conf + broken cgroup probes.
     env.pop("ES_PATH_CONF", None)
     if run_as_root:
@@ -97,7 +112,7 @@ def ensure_elasticsearch(
             "env",
             "-u",
             "ES_PATH_CONF",
-            f"ES_JAVA_OPTS={java_opts}",
+            f"ES_JAVA_OPTS={java_opts_full}",
             *cmd,
         ]
     print(f"[es] starting Elasticsearch (timeout={startup_timeout_sec:.0f}s) ...", flush=True)
@@ -142,6 +157,42 @@ def ensure_elasticsearch(
         f"Elasticsearch failed to start at {url} within {startup_timeout_sec:.0f}s. "
         f"Log tail ({bootstrap_log}):\n{tail}"
     )
+
+
+def _apply_colab_cgroup_policy(es_home: Path) -> Path:
+    """Grant Java file reads so OsProbe can open Colab's jupyter-children cgroup paths."""
+    config_dir = es_home / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    policy_path = config_dir / "colab-cgroup.policy"
+    grant_block = f"// {_COLAB_POLICY_MARKER}\n{_COLAB_CGROUP_POLICY.strip()}\n"
+    policy_path.write_text(grant_block, encoding="utf-8")
+
+    policy_targets = list(es_home.rglob("*.policy"))
+    bundled_java_policy = es_home / "jdk" / "conf" / "security" / "java.policy"
+    if bundled_java_policy.is_file():
+        policy_targets.append(bundled_java_policy)
+
+    for policy in policy_targets:
+        try:
+            text = policy.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _COLAB_POLICY_MARKER in text:
+            continue
+        try:
+            with policy.open("a", encoding="utf-8") as handle:
+                handle.write("\n" + grant_block)
+        except OSError:
+            continue
+
+    jvm_dir = config_dir / "jvm.options.d"
+    jvm_dir.mkdir(parents=True, exist_ok=True)
+    (jvm_dir / "colab.options").write_text(
+        # Single '=' appends to the default policy set (do not use '==').
+        f"-Djava.security.policy={policy_path.resolve().as_uri()}\n",
+        encoding="utf-8",
+    )
+    return policy_path
 
 
 def _ensure_runtime_user(username: str) -> None:
