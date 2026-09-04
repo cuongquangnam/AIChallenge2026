@@ -2,6 +2,7 @@
 """Install the package on Colab and pull index data from Drive (run on the VM)."""
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import time
@@ -12,6 +13,14 @@ REMOTE_DATA_DIR = Path("/content/data")
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--with-keyframes",
+        action="store_true",
+        help="Also extract Drive keyframes/*.zip into DATA_DIR/keyframes for rerank/QA.",
+    )
+    args, _unknown = parser.parse_known_args()
+
     if not REPO_ROOT.is_dir():
         raise SystemExit(
             f"Repo not found at {REPO_ROOT}. "
@@ -35,6 +44,7 @@ def main() -> None:
     sys.path.insert(0, str(REPO_ROOT / "src"))
     from video_retrieval.config import get_settings
     from video_retrieval.remote.worker import run_request
+    from video_retrieval.storage.sync_paths import SESSION_PULL_PATHS
 
     settings = get_settings(data_dir=str(REMOTE_DATA_DIR), colab=True)
     drive_root = Path(settings.drive_mount) / "MyDrive"
@@ -47,19 +57,30 @@ def main() -> None:
             "Then re-run: ./scripts/colab/laptop_bootstrap.sh"
         )
 
+    pull_paths = list(SESSION_PULL_PATHS)
+    if args.with_keyframes and "keyframes" not in pull_paths:
+        pull_paths.append("keyframes")
+
     request = {
         "job": "session_pull",
         "drive_mount": settings.drive_mount,
         "drive_data_path": settings.drive_data_path,
         "drive_local_path": "",
         "remote_data_dir": str(REMOTE_DATA_DIR),
+        "pull_paths": pull_paths,
         "settings_overrides": settings.remote_settings_overrides(),
     }
     print(
         "[bootstrap] Pulling Drive data + starting Qdrant/Elasticsearch "
-        "(progress + log tails will print while waiting)...",
+        f"(paths={pull_paths})...",
         flush=True,
     )
+    if args.with_keyframes:
+        print(
+            "[bootstrap] Keyframes unzip enabled: Drive zip(s) extract into "
+            f"{REMOTE_DATA_DIR / 'keyframes'} (large archives can take a long time).",
+            flush=True,
+        )
     t1 = time.monotonic()
     response = run_request(request)
     print(f"[bootstrap] session_pull finished in {time.monotonic() - t1:.1f}s", flush=True)

@@ -153,9 +153,9 @@ My Drive/video-retrieval/
 │   └── video_text_transnet.ndjson    # bulk ES export (not an ES snapshot)
 ├── qdrant/
 │   └── video_keyframes_transnet.snapshot   # Qdrant collection snapshot
-├── keyframes/
-│   └── keyframes.zip                 # or keyframes_000.zip, keyframes_001.zip, ...
-│                                     # zip archives are extracted automatically on the VM
+├── keyframes.zip                     # preferred: zip at Drive data root
+│                                     # also OK: keyframes/keyframes.zip or shards
+├── keyframes/                        # optional loose JPGs if no zip
 ├── manifests/                        # optional fallback for ES + QA metadata
 └── videos/                           # optional; QA pulls lazily on demand
 ```
@@ -175,7 +175,7 @@ After changing `.env`, re-upload env and re-run bootstrap:
 # or full: ./scripts/colab/laptop_setup_all.sh
 ```
 
-Default bootstrap pulls only the smaller index artifacts:
+Default bootstrap pulls the smaller index artifacts:
 
 ```text
 elasticsearch/
@@ -183,10 +183,18 @@ qdrant/
 manifests/
 ```
 
-Keyframes stay on Drive by default. If you later need the full keyframe archive(s)
-on the VM for image-heavy reranking/debugging, run on the VM:
+The Colab notebook sets `PULL_KEYFRAMES=True` and runs bootstrap with
+`--with-keyframes`. That **extracts Drive zip(s) directly** into
+`/content/data/keyframes/{video_id}/*.jpg` (no full zip copy onto the VM).
+Looks for `keyframes.zip` at the Drive data root
+(`MyDrive/video-retrieval/keyframes.zip`) or under `keyframes/`.
+Chain rerank / QA resolve frames via basename under that folder.
+
+To skip (faster start) or pull later:
 
 ```bash
+# notebook CONFIG: PULL_KEYFRAMES=False
+# or later on the VM:
 cd /content/video-retrieval
 python3 scripts/colab/pull_data_remote.py --with-keyframes
 ```

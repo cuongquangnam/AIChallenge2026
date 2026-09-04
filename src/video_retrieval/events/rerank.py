@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from video_retrieval.config import Settings
 from video_retrieval.models import EventSpec, SearchHit
+from video_retrieval.storage.keyframe_paths import resolve_keyframe_path
 
 if TYPE_CHECKING:
     from video_retrieval.model_pool import ModelPool
@@ -78,7 +78,11 @@ class CrossEncoderReranker:
         indices: list[int] = []
         fallback = _mock_ce_score
         for idx, (_, _, hit) in enumerate(cands):
-            path = resolve_keyframe_path(self.settings, hit, video_id=video_id)
+            path = resolve_keyframe_path(
+                self.settings,
+                video_id=video_id,
+                keyframe_path=hit.keyframe_path,
+            )
             if path is None:
                 continue
             try:
@@ -128,22 +132,6 @@ class CrossEncoderReranker:
         self._processor = BlipProcessor.from_pretrained(model_id)
         self._model = BlipForImageTextRetrieval.from_pretrained(model_id).to(self._device)
         self._model.eval()
-
-
-def resolve_keyframe_path(settings: Settings, hit: SearchHit, *, video_id: str) -> Path | None:
-    if not hit.keyframe_path:
-        return None
-    raw = Path(hit.keyframe_path)
-    if raw.is_file():
-        return raw
-    for candidate in (
-        settings.keyframes_dir / video_id / raw.name,
-        settings.keyframes_dir / raw.name,
-        settings.data_dir / raw,
-    ):
-        if candidate.is_file():
-            return candidate
-    return None
 
 
 def _event_query(spec: EventSpec | None, *, event_id: str, context: str) -> str:

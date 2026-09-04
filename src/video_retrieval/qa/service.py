@@ -9,6 +9,7 @@ from video_retrieval.events.pipeline import EventChainTaskBase
 from video_retrieval.events.plan_utils import event_description, questioned_frame
 from video_retrieval.events.searcher import EventChainSearcher
 from video_retrieval.models import EventChain, QAAnswerHit, QAResult, QAResultItem, SearchHit
+from video_retrieval.storage.keyframe_paths import resolve_keyframe_path
 from video_retrieval.storage.qa_video_sync import ensure_qa_videos_from_drive
 from video_retrieval.qa.frames import QAFrameSampler
 from video_retrieval.qa.llm import QAModel, QASingleFrameRequest, create_qa_model
@@ -195,8 +196,12 @@ class QAService(EventChainTaskBase):
     ) -> Path | None:
         for event in chain.events:
             if event.frame_index == frame_id and event.keyframe_path:
-                path = Path(event.keyframe_path)
-                if path.is_file():
+                path = resolve_keyframe_path(
+                    self.settings,
+                    video_id=chain.video_id,
+                    keyframe_path=event.keyframe_path,
+                )
+                if path is not None:
                     return path
         if radius <= 0:
             return None

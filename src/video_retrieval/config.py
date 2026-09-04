@@ -161,6 +161,8 @@ class Settings(BaseSettings):
             "visual_backend": self.visual_backend,
             "ocr_backend": self.ocr_backend,
             "asr_backend": self.asr_backend,
+            "chain_rerank_enabled": self.chain_rerank_enabled,
+            "chain_rerank_backend": self.chain_rerank_backend,
             "query_planner": self.query_planner,
             "llm_backend": self.llm_backend,
             "qa_llm_backend": self.qa_llm_backend,

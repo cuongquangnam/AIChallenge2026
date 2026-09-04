@@ -126,7 +126,11 @@ class DriveDataSync:
             src = source_root / path_name
             _progress(f"[pull {idx}/{total_paths}] {path_name} from {src} ...")
             if path_name == "keyframes":
-                n = _copy_keyframes(src, self.local_dir / path_name, progress=True)
+                n = _hydrate_keyframes(
+                    source_root,
+                    self.local_dir / "keyframes",
+                    progress=True,
+                )
             else:
                 n = _copy_tree(
                     src,
@@ -277,28 +281,89 @@ def _copy_tree(
     return copied
 
 
-def _copy_keyframes(source: Path, destination: Path, *, progress: bool) -> int:
-    """Copy keyframes from Drive, preferring zip archives over many loose files."""
-    zip_paths = sorted(source.glob("*.zip")) if source.is_dir() else []
+def _discover_keyframe_zips(source_root: Path) -> list[Path]:
+    """Find keyframe archives under the Drive data root.
+
+    Supported layouts:
+    - ``{root}/keyframes.zip``
+    - ``{root}/keyframes_000.zip`` (shards)
+    - ``{root}/keyframes/*.zip``
+    """
+    found: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(path: Path) -> None:
+        try:
+            key = path.resolve()
+        except OSError:
+            key = path
+        if key in seen or not path.is_file():
+            return
+        seen.add(key)
+        found.append(path)
+
+    preferred = source_root / "keyframes.zip"
+    if preferred.is_file():
+        _add(preferred)
+    for path in sorted(source_root.glob("keyframes_*.zip")):
+        _add(path)
+
+    nested = source_root / "keyframes"
+    if nested.is_dir():
+        nested_preferred = nested / "keyframes.zip"
+        if nested_preferred.is_file():
+            _add(nested_preferred)
+        for path in sorted(nested.glob("*.zip")):
+            _add(path)
+    return found
+
+
+def _hydrate_keyframes(source_root: Path, destination: Path, *, progress: bool) -> int:
+    """Hydrate local keyframes from Drive zip(s) or a loose JPG tree.
+
+    Prefer extracting zip archive(s) **from Drive into** ``destination`` so a
+    large archive is not copied twice. Looks for ``keyframes.zip`` at the Drive
+    data root and under ``keyframes/``.
+    """
+    zip_paths = _discover_keyframe_zips(source_root)
     if zip_paths:
         if progress:
             names = ", ".join(path.name for path in zip_paths[:5])
             suffix = " ..." if len(zip_paths) > 5 else ""
+            locations = ", ".join(str(path.parent) for path in zip_paths[:3])
             _progress(
-                f"  found {len(zip_paths)} zip archive(s) ({names}{suffix}); "
-                "copying archives instead of loose keyframes"
+                f"  found {len(zip_paths)} zip archive(s) ({names}{suffix}) "
+                f"under {locations}; extracting from Drive into local keyframes "
+                "(no zip copy)"
             )
-        destination.mkdir(parents=True, exist_ok=True)
-        copied = 0
-        for zip_path in zip_paths:
-            dest = destination / zip_path.name
-            if dest.is_file() and dest.stat().st_size == zip_path.stat().st_size:
-                continue
-            logger.info("Drive keyframes: copying archive %s ...", zip_path.name)
-            _copy_file(zip_path, dest, timeout_sec=300.0)
-            copied += 1
-        return copied
-    return _copy_tree(source, destination, label="keyframes", progress=progress)
+        from video_retrieval.storage.post_pull import extract_keyframes_zip
+
+        result = extract_keyframes_zip(
+            destination,
+            zip_paths=zip_paths,
+            progress=progress,
+        )
+        if result.get("action") == "extracted":
+            return int(result.get("members") or len(zip_paths))
+        if result.get("action") == "skip":
+            return int(result.get("video_dirs") or 0)
+        return len(zip_paths)
+
+    keyframes_dir = source_root / "keyframes"
+    return _copy_tree(
+        keyframes_dir,
+        destination,
+        label="keyframes",
+        progress=progress,
+    )
+
+
+# Back-compat alias used by older tests / imports.
+def _copy_keyframes(source: Path, destination: Path, *, progress: bool) -> int:
+    """Hydrate from a ``keyframes/`` folder or treat ``source`` as the Drive root."""
+    if source.name == "keyframes" and source.parent.is_dir():
+        return _hydrate_keyframes(source.parent, destination, progress=progress)
+    return _hydrate_keyframes(source, destination, progress=progress)
 
 
 def _copy_file(src: Path, dest: Path, *, timeout_sec: float) -> None:

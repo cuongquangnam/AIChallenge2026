@@ -23,7 +23,10 @@ def main() -> None:
     parser.add_argument(
         "--with-keyframes",
         action="store_true",
-        help="Also pull keyframes zip archive(s) from Drive and extract them on the VM.",
+        help=(
+            "Extract Drive keyframes/*.zip into DATA_DIR/keyframes "
+            "(reads zip from Drive; does not copy the archive first)."
+        ),
     )
     parser.add_argument(
         "--skip-keyframes",

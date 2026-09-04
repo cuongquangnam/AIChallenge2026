@@ -86,18 +86,40 @@ def test_extract_keyframes_zip_skips_when_already_present(tmp_path: Path) -> Non
 
 
 @pytest.mark.unit
-def test_copy_keyframes_prefers_zip_over_loose_files(tmp_path: Path) -> None:
+def test_hydrate_keyframes_from_root_level_zip(tmp_path: Path) -> None:
+    """Drive layout: video-retrieval/keyframes.zip (not under keyframes/)."""
+    from video_retrieval.storage.drive_sync import _hydrate_keyframes
+
+    source_root = tmp_path / "drive" / "video-retrieval"
+    source_root.mkdir(parents=True)
+    with zipfile.ZipFile(source_root / "keyframes.zip", "w") as archive:
+        archive.writestr("L21_V001/shot_0001_middle.jpg", b"from-root-zip")
+    dest = tmp_path / "data" / "keyframes"
+
+    copied = _hydrate_keyframes(source_root, dest, progress=False)
+
+    assert copied == 1
+    assert (dest / "L21_V001" / "shot_0001_middle.jpg").read_bytes() == b"from-root-zip"
+    assert not (dest / "keyframes.zip").exists()
+
+
+@pytest.mark.unit
+def test_copy_keyframes_extracts_zip_from_drive_without_copying_archive(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "drive" / "keyframes"
     loose = source / "L21_V001"
     loose.mkdir(parents=True)
     (loose / "shot_0001_middle.jpg").write_bytes(b"loose")
-    (source / "keyframes.zip").write_bytes(b"zip")
+    with zipfile.ZipFile(source / "keyframes.zip", "w") as archive:
+        archive.writestr("L21_V002/shot_0001_middle.jpg", b"from-zip")
     dest = tmp_path / "data" / "keyframes"
 
     copied = _copy_keyframes(source, dest, progress=False)
 
     assert copied == 1
-    assert (dest / "keyframes.zip").read_bytes() == b"zip"
+    assert not (dest / "keyframes.zip").exists()
+    assert (dest / "L21_V002" / "shot_0001_middle.jpg").read_bytes() == b"from-zip"
     assert not (dest / "L21_V001").exists()
 
 
@@ -119,15 +141,32 @@ def test_extract_keyframes_multiple_zip_shards(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_copy_keyframes_copies_all_zip_shards(tmp_path: Path) -> None:
+def test_copy_keyframes_extracts_all_zip_shards(tmp_path: Path) -> None:
     source = tmp_path / "drive" / "keyframes"
     source.mkdir(parents=True)
-    (source / "keyframes_000.zip").write_bytes(b"zip0")
-    (source / "keyframes_001.zip").write_bytes(b"zip1")
+    with zipfile.ZipFile(source / "keyframes_000.zip", "w") as archive:
+        archive.writestr("L21_V001/shot_0001_middle.jpg", b"jpg0")
+    with zipfile.ZipFile(source / "keyframes_001.zip", "w") as archive:
+        archive.writestr("L21_V002/shot_0001_middle.jpg", b"jpg1")
     dest = tmp_path / "data" / "keyframes"
 
     copied = _copy_keyframes(source, dest, progress=False)
 
     assert copied == 2
-    assert (dest / "keyframes_000.zip").read_bytes() == b"zip0"
-    assert (dest / "keyframes_001.zip").read_bytes() == b"zip1"
+    assert (dest / "L21_V001" / "shot_0001_middle.jpg").read_bytes() == b"jpg0"
+    assert (dest / "L21_V002" / "shot_0001_middle.jpg").read_bytes() == b"jpg1"
+
+
+@pytest.mark.unit
+def test_extract_keyframes_from_external_zip_paths(tmp_path: Path) -> None:
+    drive_zip = tmp_path / "drive" / "keyframes.zip"
+    drive_zip.parent.mkdir(parents=True)
+    with zipfile.ZipFile(drive_zip, "w") as archive:
+        archive.writestr("keyframes/L21_V001/shot_0001_middle.jpg", b"jpg")
+    dest = tmp_path / "data" / "keyframes"
+
+    result = extract_keyframes_zip(dest, zip_paths=[drive_zip], progress=False)
+
+    assert result["action"] == "extracted"
+    assert (dest / "L21_V001" / "shot_0001_middle.jpg").is_file()
+    assert not (dest / "keyframes.zip").exists()
