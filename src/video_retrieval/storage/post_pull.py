@@ -104,6 +104,7 @@ def prepare_colab_qdrant(
             client_url,
             install_dir=Path(settings.colab_qdrant_install_dir),
             storage_path=settings.qdrant_dir / "storage",
+            startup_timeout_sec=1800.0,
         )
         return {"action": "skip", "reason": "no_snapshot", "url": client_url}, client_url
 
@@ -119,6 +120,7 @@ def prepare_colab_qdrant(
         DEFAULT_QDRANT_URL,
         install_dir=Path(settings.colab_qdrant_install_dir),
         storage_path=storage_path,
+        startup_timeout_sec=1800.0,
     )
 
     from qdrant_client import QdrantClient

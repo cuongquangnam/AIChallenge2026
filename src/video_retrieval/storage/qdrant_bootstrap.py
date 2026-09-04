@@ -58,7 +58,7 @@ def ensure_qdrant_server(
     *,
     install_dir: Path,
     storage_path: Path,
-    startup_timeout_sec: float = 120.0,
+    startup_timeout_sec: float = 1800.0,
 ) -> None:
     """Download and start a single-node Qdrant HTTP server if ``url`` is not reachable."""
     install_dir = Path(install_dir)
@@ -123,7 +123,7 @@ def ensure_qdrant_server(
     with log_path.open("ab") as log_handle:
         log_handle.write(f"\n==== start {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n".encode())
         log_handle.flush()
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [str(binary), "--config-path", str(config_path)],
             cwd=str(install_dir),
             stdout=log_handle,
@@ -135,10 +135,16 @@ def ensure_qdrant_server(
     last_print = 0.0
     while time.monotonic() < deadline:
         if is_qdrant_ready(url):
-            print(f"[qdrant] ready at {url}", flush=True)
+            print(f"[qdrant] ready at {url} (pid={proc.pid})", flush=True)
             return
+        if proc.poll() is not None:
+            tail = _tail_text(log_path)
+            raise RuntimeError(
+                f"Qdrant exited early with code {proc.returncode}. "
+                f"Log tail ({log_path}):\n{tail}"
+            )
         now = time.monotonic()
-        if now - last_print >= 10.0:
+        if now - last_print >= 30.0:
             print(
                 f"[qdrant] still starting… ({int(deadline - now)}s left) see {log_path}",
                 flush=True,
