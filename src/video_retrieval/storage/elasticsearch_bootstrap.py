@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 
 from video_retrieval.storage.progress_log import Heartbeat, print_log_heartbeat, tail_text
@@ -22,12 +23,17 @@ ES_RUNTIME_USER = "elasticsearch"
 # Colab resolves cgroup cpu.stat under paths like
 # /sys/fs/cgroup/../../jupyter-children/cpu.stat which escape the default
 # /sys/fs/cgroup/- Java grant and crash OsService at boot.
-_COLAB_CGROUP_POLICY = """
-grant {
-  permission java.io.FilePermission "<<ALL FILES>>", "read,readlink";
-};
-"""
 _COLAB_POLICY_MARKER = "AIChallenge2026-colab-cgroup-grant"
+_COLAB_CGROUP_GRANT = f"""
+grant {{
+  // {_COLAB_POLICY_MARKER}
+  permission java.io.FilePermission "/sys/jupyter-children/-", "read";
+  permission java.io.FilePermission "/jupyter-children/-", "read";
+  permission java.io.FilePermission "/sys/fs/cgroup/../../jupyter-children/-", "read";
+  permission java.io.FilePermission "/sys/fs/cgroup/../../jupyter-children/cpu.stat", "read";
+}};
+"""
+_COLAB_CPU_STAT = "usage_usec 0\nuser_usec 0\nsystem_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\n"
 
 
 def is_elasticsearch_ready(url: str, *, timeout: float = 1.0) -> bool:
@@ -63,9 +69,9 @@ def ensure_elasticsearch(
     data_dir.mkdir(parents=True, exist_ok=True)
     es_home = install_dir / f"elasticsearch-{ES_VERSION}"
 
-    if es_home.is_dir() and _jdk_crypto_policies_corrupted(es_home):
+    if es_home.is_dir() and _es_install_needs_repair(es_home):
         print(
-            "[es] JDK crypto policies were corrupted by an earlier Colab patch; re-extracting ES...",
+            "[es] previous Colab ES install is corrupted/patched incorrectly; re-extracting...",
             flush=True,
         )
         shutil.rmtree(es_home)
@@ -76,8 +82,9 @@ def ensure_elasticsearch(
             _download_and_extract(install_dir)
         print(f"[es] extracted to {es_home}", flush=True)
 
-    policy_path = _apply_colab_cgroup_policy(es_home)
-    print(f"[es] applied Colab cgroup Java policy at {policy_path}", flush=True)
+    _prepare_colab_cgroup_files()
+    policy_note = _apply_colab_cgroup_policy(es_home)
+    print(f"[es] Colab cgroup workaround: {policy_note}", flush=True)
 
     log_dir = data_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -89,9 +96,7 @@ def ensure_elasticsearch(
         _chown_tree(es_home, ES_RUNTIME_USER)
         _chown_tree(data_dir, ES_RUNTIME_USER)
 
-    java_opts_full = (
-        f"{java_opts} -Djava.security.policy={policy_path.resolve().as_uri()}"
-    ).strip()
+    java_opts_full = java_opts.strip()
     cmd = [
         str(es_home / "bin" / "elasticsearch"),
         "-E",
@@ -129,6 +134,8 @@ def ensure_elasticsearch(
         ]
     print(f"[es] starting Elasticsearch (timeout={startup_timeout_sec:.0f}s) ...", flush=True)
     print(f"[es] logs: {bootstrap_log}", flush=True)
+    # Truncate so heartbeats show only the current boot attempt.
+    bootstrap_log.write_text("", encoding="utf-8")
     with bootstrap_log.open("ab") as log_handle:
         log_handle.write(f"\n==== start {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n".encode())
         log_handle.flush()
@@ -172,31 +179,16 @@ def ensure_elasticsearch(
     )
 
 
-def _jdk_crypto_policies_corrupted(es_home: Path) -> bool:
-    """True when an earlier patch wrote into JDK jurisdiction policy files."""
+def _es_install_needs_repair(es_home: Path) -> bool:
+    """True when an earlier Colab patch broke JDK crypto or module policies."""
     jdk_security = es_home / "jdk" / "conf" / "security"
-    if not jdk_security.is_dir():
-        return False
-    for policy in jdk_security.rglob("*.policy"):
-        try:
-            if _COLAB_POLICY_MARKER in policy.read_text(encoding="utf-8", errors="replace"):
-                return True
-        except OSError:
-            continue
-    return False
-
-
-def _apply_colab_cgroup_policy(es_home: Path) -> Path:
-    """Grant Java file reads so OsProbe can open Colab's jupyter-children cgroup paths.
-
-    Never modify ``jdk/conf/security/**`` — those jurisdiction policy files must stay
-    pristine or JCE fails with \"Couldn't parse jurisdiction policy files\".
-    """
-    config_dir = es_home / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    policy_path = config_dir / "colab-cgroup.policy"
-    grant_block = f"// {_COLAB_POLICY_MARKER}\n{_COLAB_CGROUP_POLICY.strip()}\n"
-    policy_path.write_text(grant_block, encoding="utf-8")
+    if jdk_security.is_dir():
+        for policy in jdk_security.rglob("*.policy"):
+            try:
+                if _COLAB_POLICY_MARKER in policy.read_text(encoding="utf-8", errors="replace"):
+                    return True
+            except OSError:
+                continue
 
     modules_dir = es_home / "modules"
     if modules_dir.is_dir():
@@ -205,22 +197,59 @@ def _apply_colab_cgroup_policy(es_home: Path) -> Path:
                 text = policy.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            if _COLAB_POLICY_MARKER in text:
-                continue
-            try:
-                with policy.open("a", encoding="utf-8") as handle:
-                    handle.write("\n" + grant_block)
-            except OSError:
-                continue
+            if _COLAB_POLICY_MARKER in text or "<<ALL FILES>>" in text:
+                return True
+    return False
 
-    jvm_dir = config_dir / "jvm.options.d"
-    jvm_dir.mkdir(parents=True, exist_ok=True)
-    (jvm_dir / "colab.options").write_text(
-        # Single '=' appends to the default policy set (do not use '==').
-        f"-Djava.security.policy={policy_path.resolve().as_uri()}\n",
-        encoding="utf-8",
+
+def _prepare_colab_cgroup_files() -> None:
+    """Create readable stub cpu.stat files where Colab's cgroup path resolves."""
+    stubs = (
+        Path("/sys/jupyter-children/cpu.stat"),
+        Path("/jupyter-children/cpu.stat"),
+        Path("/sys/fs/cgroup/../../jupyter-children/cpu.stat"),
     )
-    return policy_path
+    for stub in stubs:
+        try:
+            stub.parent.mkdir(parents=True, exist_ok=True)
+            if not stub.is_file():
+                stub.write_text(_COLAB_CPU_STAT, encoding="utf-8")
+            stub.chmod(0o644)
+        except OSError as exc:
+            print(f"[es] warn: could not create cgroup stub {stub}: {exc}", flush=True)
+
+
+def _apply_colab_cgroup_policy(es_home: Path) -> str:
+    """Patch server security.policy inside the ES jar with Colab-specific path grants.
+
+    Do not touch ``jdk/conf/security/**`` (breaks JCE) or ``plugin-security.policy``
+    (ES rejects broad FilePermission grants there).
+    """
+    lib_dir = es_home / "lib"
+    jars = sorted(lib_dir.glob("elasticsearch-*.jar")) if lib_dir.is_dir() else []
+    if not jars:
+        return "skipped (elasticsearch jar not found)"
+
+    target_jar = jars[0]
+    member = "org/elasticsearch/bootstrap/security.policy"
+    try:
+        with zipfile.ZipFile(target_jar, "r") as zin:
+            if member not in zin.namelist():
+                return f"skipped ({member} missing in {target_jar.name})"
+            original = zin.read(member).decode("utf-8")
+            if _COLAB_POLICY_MARKER in original:
+                return f"already patched {target_jar.name}"
+
+            updated = original.rstrip() + "\n" + _COLAB_CGROUP_GRANT.strip() + "\n"
+            tmp_jar = target_jar.with_suffix(".jar.colab-tmp")
+            with zipfile.ZipFile(tmp_jar, "w") as zout:
+                for info in zin.infolist():
+                    data = updated.encode("utf-8") if info.filename == member else zin.read(info.filename)
+                    zout.writestr(info, data)
+        tmp_jar.replace(target_jar)
+    except OSError as exc:
+        return f"failed to patch {target_jar.name}: {exc}"
+    return f"patched {target_jar.name}"
 
 
 def _ensure_runtime_user(username: str) -> None:
