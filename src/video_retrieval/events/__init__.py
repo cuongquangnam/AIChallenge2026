@@ -2,6 +2,7 @@ from video_retrieval.events.align import best_monotonic_path, greedy_monotonic_p
 from video_retrieval.events.export import (
     chain_to_csv_line,
     chains_to_csv_lines,
+    chains_to_flat_event_hits,
     chains_to_search_hits,
     chains_to_submission_rows,
 )

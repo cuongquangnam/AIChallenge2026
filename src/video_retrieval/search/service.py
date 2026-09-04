@@ -249,28 +249,6 @@ def _event_weights(event) -> dict[str, float]:
     return {key: weight if channels[key] else 0.0 for key in ("ocr", "asr", "visual")}
 
 
-def _rrf_fuse(rankings: list[list[SearchHit]], *, limit: int, k: int = 60) -> list[SearchHit]:
-    scores: dict[str, float] = {}
-    best: dict[str, SearchHit] = {}
-
-    for ranking in rankings:
-        for rank, hit in enumerate(ranking):
-            key = (
-                f"{hit.video_id}|{hit.shot_index}|{hit.frame_index}|{hit.source}|{hit.text or ''}"
-            )
-            scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
-            if key not in best or hit.score > best[key].score:
-                best[key] = hit
-
-    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]
-    fused: list[SearchHit] = []
-    for key, score in ordered:
-        hit = best[key].model_copy()
-        hit.score = score
-        fused.append(hit)
-    return fused
-
-
 def _frame_key(hit: SearchHit) -> tuple:
     return (hit.video_id, hit.shot_index, hit.frame_index)
 

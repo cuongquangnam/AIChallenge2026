@@ -1,10 +1,5 @@
 /** CSV export helpers for flat frame submissions. */
 
-export const SUBMISSION_PAD_OFFSETS = [
-  1, -1, 2, -2, 3, -3, 5, -5, 8, -8, 12, -12, 15, -15, 20, -20, 25, -25, 30, -30,
-  40, -40, 50, -50,
-];
-
 export function queryIdFromFilename(name) {
   const base = String(name || "")
     .replace(/^.*[\\/]/, "")
@@ -26,7 +21,7 @@ export function downloadTextFile(text, filename, mime = "text/csv;charset=utf-8"
   return anchor.download;
 }
 
-export function hitsToSubmissionRows(hits, limit, padOffsets = SUBMISSION_PAD_OFFSETS) {
+export function hitsToSubmissionRows(hits, limit) {
   const rows = [];
   const seen = new Set();
 
@@ -44,40 +39,55 @@ export function hitsToSubmissionRows(hits, limit, padOffsets = SUBMISSION_PAD_OF
     }
   }
 
-  if (limit == null) {
-    return rows;
-  }
+  return rows;
+}
 
-  const seeds = [...rows];
-  let offsetI = 0;
-  while (rows.length < limit && seeds.length) {
-    const offset = padOffsets[offsetI % padOffsets.length];
-    const cycle = Math.floor(offsetI / padOffsets.length);
-    const seed = seeds[cycle % seeds.length];
-    const candidate = [seed[0], seed[1] + offset];
-    offsetI += 1;
-    if (candidate[1] < 0) continue;
-    const key = `${candidate[0]}|${candidate[1]}`;
-    if (seen.has(key)) {
-      if (offsetI > limit * 200) break;
-      continue;
+/** Flatten chains to export rows in chain rank + E1…En order (no padding). */
+export function hitsFromTrakeChains(chains) {
+  const hits = [];
+  for (const chain of chains || []) {
+    for (const event of chain.events || []) {
+      hits.push({
+        video_id: chain.video_id,
+        frame_index: event.frame_index,
+        frame_id: event.frame_index,
+        timestamp_sec: event.timestamp_sec,
+        image_url: event.image_url,
+        video_url: event.video_url || chain.video_url,
+        source: `trake:${event.event_id}`,
+        score: chain.score,
+      });
     }
-    seen.add(key);
-    rows.push(candidate);
   }
+  return hits;
+}
 
-  if (rows.length < limit && rows.length) {
-    const last = rows[rows.length - 1];
-    let nxt = last[1] + 1;
-    while (rows.length < limit) {
-      const key = `${last[0]}|${nxt}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        rows.push([last[0], nxt]);
+/** Flatten QA chain results to export rows in chain + event order. */
+export function hitsFromQaResults(results, limit = 100) {
+  const hits = [];
+  const seen = new Set();
+  for (const item of results || []) {
+    const chain = item.chain || {};
+    const answer = item.answer || "";
+    for (const event of chain.events || []) {
+      const key = `${chain.video_id}|${event.frame_index}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hits.push({
+        video_id: chain.video_id,
+        frame_index: event.frame_index,
+        frame_id: event.frame_index,
+        timestamp_sec: event.timestamp_sec,
+        image_url: event.image_url,
+        video_url: event.video_url || chain.video_url,
+        answer,
+        source: `qa:${event.event_id}`,
+        score: chain.score,
+      });
+      if (hits.length >= limit) {
+        return hits;
       }
-      nxt += 1;
     }
   }
-
-  return rows.slice(0, limit);
+  return hits;
 }

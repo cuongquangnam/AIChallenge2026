@@ -13,7 +13,6 @@ from video_retrieval.storage.qa_video_sync import ensure_qa_videos_from_drive
 from video_retrieval.qa.frames import QAFrameSampler
 from video_retrieval.qa.llm import QAModel, QASingleFrameRequest, create_qa_model
 from video_retrieval.query_stages import log_query_stage
-from video_retrieval.search.kis import hits_to_submission_rows
 from video_retrieval.search.service import SearchService
 from video_retrieval.text.gemini_logging import log_gemini_failure
 
@@ -269,21 +268,6 @@ class QAService(EventChainTaskBase):
             chain = item.chain
             answer = item.answer
             base_score = float(chain.score) + 10.0 * (len(results) - rank)
-
-            q_event = next(
-                (ev for ev in chain.events if ev.event_id == item.questioned_event_id),
-                None,
-            )
-            q_ts = q_event.timestamp_sec if q_event else None
-            _add(
-                chain.video_id,
-                item.questioned_frame_id,
-                answer,
-                score=base_score + 1.0,
-                timestamp_sec=q_ts,
-                source="qa_question",
-            )
-
             for event in chain.events:
                 if len(rows) >= limit:
                     break
@@ -291,30 +275,9 @@ class QAService(EventChainTaskBase):
                     chain.video_id,
                     event.frame_index,
                     answer,
-                    score=base_score + event.score * 0.01,
+                    score=base_score + event.score * 0.001,
                     timestamp_sec=event.timestamp_sec,
-                    source=f"qa_chain:{event.event_id}",
+                    source=f"qa:{event.event_id}",
                 )
-
-        if len(rows) < limit and rows:
-            seed_hits = [
-                SearchHit(
-                    video_id=row.video_id,
-                    score=row.score,
-                    source=row.source,
-                    frame_index=row.frame_id,
-                    timestamp_sec=row.timestamp_sec,
-                )
-                for row in rows
-            ]
-            try:
-                padded = hits_to_submission_rows(seed_hits, limit=limit)
-            except ValueError:
-                padded = [(row.video_id, row.frame_id) for row in rows]
-            for video, frame in padded:
-                if len(rows) >= limit:
-                    break
-                answer = rows[0].answer if rows else ""
-                _add(video, frame, answer, score=0.01, source="qa_pad")
 
         return rows[:limit]

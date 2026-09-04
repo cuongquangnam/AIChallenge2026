@@ -9,34 +9,6 @@ from typing import Iterable
 from video_retrieval.models import SearchHit, SearchResponse
 from video_retrieval.search.service import SearchService
 
-# Nearby-frame offsets used when fewer than ``limit`` unique hits are returned.
-_PAD_OFFSETS = (
-    1,
-    -1,
-    2,
-    -2,
-    3,
-    -3,
-    5,
-    -5,
-    8,
-    -8,
-    12,
-    -12,
-    15,
-    -15,
-    20,
-    -20,
-    25,
-    -25,
-    30,
-    -30,
-    40,
-    -40,
-    50,
-    -50,
-)
-
 
 def load_queries(path: Path) -> dict[str, str]:
     """Load ``{query_id: query_text}`` from a JSON object file."""
@@ -60,11 +32,7 @@ def hits_to_submission_rows(
     *,
     limit: int = 100,
 ) -> list[tuple[str, int]]:
-    """Convert ranked hits to unique ``(video_id, frame_index)`` rows.
-
-    Pads with nearby frame indices from the top hits when fewer than ``limit``
-    unique frames are available (Textual KIS expects a fixed-length list).
-    """
+    """Convert hits to unique ``(video_id, frame_index)`` rows (no padding)."""
     if limit < 1:
         raise ValueError("limit must be >= 1")
 
@@ -83,37 +51,11 @@ def hits_to_submission_rows(
         seen.add(key)
         rows.append(key)
         if len(rows) >= limit:
-            return rows[:limit]
+            return rows
 
-    seeds = list(rows)
-    offset_i = 0
-    while len(rows) < limit and seeds:
-        offset = _PAD_OFFSETS[offset_i % len(_PAD_OFFSETS)]
-        cycle = offset_i // len(_PAD_OFFSETS)
-        seed = seeds[cycle % len(seeds)]
-        candidate = (seed[0], seed[1] + offset)
-        offset_i += 1
-        if candidate[1] < 0 or candidate in seen:
-            if offset_i > limit * 200:
-                break
-            continue
-        seen.add(candidate)
-        rows.append(candidate)
-
-    if len(rows) < limit and rows:
-        last = rows[-1]
-        nxt = last[1] + 1
-        while len(rows) < limit:
-            key = (last[0], nxt)
-            nxt += 1
-            if key in seen:
-                continue
-            seen.add(key)
-            rows.append(key)
-
-    if len(rows) < limit:
-        raise ValueError(f"Need at least one hit to build {limit} submission rows")
-    return rows[:limit]
+    if not rows:
+        raise ValueError("Need at least one hit to build submission rows")
+    return rows
 
 
 def write_kis_csv(path: Path, rows: Iterable[tuple[str, int]]) -> None:

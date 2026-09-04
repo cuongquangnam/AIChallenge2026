@@ -27,8 +27,8 @@
         <p class="brand">Framefind · KIS</p>
         <h1>Textual known-item search</h1>
         <p class="lede">
-          Extract ordered events, align chains in video, export
-          <code>video_id,frame_idx</code> CSV (100 rows).
+          Extract ordered events, align chains in video, import or export
+          <code>video_id,frame_idx[,time_sec]</code> CSV.
         </p>
 
         <form id="search-form" class="search-form" autocomplete="off">
@@ -126,7 +126,7 @@
         </aside>
         <h2 class="section-title">Aligned chains</h2>
         <div id="chains" class="trake-chains kis-chains"></div>
-        <h2 class="section-title">Export preview (flat frames)</h2>
+        <h2 class="section-title">Export preview (chain order)</h2>
         <div class="grid kis-export-grid" id="grid"></div>
       </section>
     </main>

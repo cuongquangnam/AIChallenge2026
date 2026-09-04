@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from video_retrieval.config import Settings, get_settings
-from video_retrieval.events.export import chains_to_csv_lines
+from video_retrieval.events.export import chains_to_csv_lines, chains_to_flat_event_hits
 from video_retrieval.pipeline.indexer import VideoIndexer
 from video_retrieval.qa.frames import QAFrameExtractionError, VideoNotFoundForQAError
 from video_retrieval.qa.llm import (
@@ -29,6 +30,46 @@ settings = get_settings()
 settings.ensure_dirs()
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+QUERIES_DIR = Path(__file__).resolve().parents[2] / "queries"
+
+_query_catalog: dict[str, str] | None = None
+
+
+def _load_query_catalog() -> dict[str, str]:
+    global _query_catalog
+    if _query_catalog is not None:
+        return _query_catalog
+    catalog: dict[str, str] = {}
+    if QUERIES_DIR.is_dir():
+        for path in sorted(QUERIES_DIR.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning("Could not load queries from %s: %s", path, exc)
+                continue
+            if not isinstance(payload, dict):
+                continue
+            for key, value in payload.items():
+                query_id = str(key).strip()
+                text = str(value).strip()
+                if query_id and text and query_id not in catalog:
+                    catalog[query_id] = text
+    _query_catalog = catalog
+    return catalog
+
+
+def _resolve_query_text(query_id: str) -> str | None:
+    catalog = _load_query_catalog()
+    qid = query_id.strip()
+    if not qid:
+        return None
+    if qid in catalog:
+        return catalog[qid]
+    if qid.startswith("query-"):
+        alt = qid[6:]
+        if alt in catalog:
+            return catalog[alt]
+    return None
 
 
 @asynccontextmanager
@@ -114,6 +155,14 @@ class ResolveSubmissionRequest(BaseModel):
         description="Raw CSV text with video_id,frame_idx (no header required)",
     )
     query_id: str = ""
+
+
+@app.get("/api/queries/{query_id}")
+def get_query_text(query_id: str) -> dict[str, str]:
+    text = _resolve_query_text(query_id)
+    if not text:
+        raise HTTPException(status_code=404, detail=f"Unknown query id: {query_id}")
+    return {"query_id": query_id.strip(), "text": text}
 
 
 @app.get("/health")
@@ -536,6 +585,10 @@ def trake_search(body: TrakeRequest):
 
     payload = result.model_dump(mode="json")
     payload = _enrich_chains(payload)
+    flat_hits = chains_to_flat_event_hits(result.chains, source_prefix="trake")
+    payload["hits"] = _enrich_search_payload(
+        {"hits": [hit.model_dump(mode="json") for hit in flat_hits]}
+    )["hits"]
     csv_lines = chains_to_csv_lines(result.chains)
     if csv_lines:
         payload["csv_text"] = "\n".join(csv_lines) + "\n"

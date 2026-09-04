@@ -30,7 +30,7 @@ class KisService(EventChainTaskBase):
         chains = self.search_event_chains(plan, top_chains=chain_limit)
         log_query_stage("kis", "export_rows", limit=limit)
         rows = chains_to_submission_rows(chains, limit=limit)
-        hits = chains_to_search_hits(chains)
+        hits = chains_to_search_hits(chains, limit=limit)
         log_query_stage("kis", "done", rows=len(rows), chains=len(chains))
         return KisResult(
             query=query.strip(),

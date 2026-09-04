@@ -27,8 +27,8 @@
         <p class="brand">Framefind · TRAKE</p>
         <h1>Temporal event alignment</h1>
         <p class="lede">
-          Parse E1…En, align ordered frames in one video, export
-          <code>video_id,frame_E1,…,frame_En</code>.
+          Parse E1…En, align ordered frames in one video, import or export
+          <code>video_id,frame_E1,…,frame_En[,time_E1,…]</code>.
         </p>
 
         <form id="trake-form" class="search-form" autocomplete="off">
@@ -60,6 +60,13 @@
               </select>
             </label>
             <button type="submit" id="submit-btn">Run TRAKE</button>
+            <button type="button" id="import-btn" class="import-btn">Import CSV</button>
+            <input
+              id="import-csv"
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+            />
             <button type="button" id="export-btn" class="export-btn">Export CSV</button>
           </div>
         </form>
@@ -91,6 +98,9 @@
         </div>
 
         <div class="trake-chains" id="chains"></div>
+
+        <h2 class="section-title">Export preview (chain order)</h2>
+        <div class="grid trake-export-grid" id="export-grid"></div>
       </section>
     </main>
 

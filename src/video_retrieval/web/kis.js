@@ -9,6 +9,11 @@ import {
   queryIdFromFilename,
 } from "./shared/export.js";
 import {
+  fetchQueryText,
+  openCsvFilePicker,
+  resolveSubmissionFrames,
+} from "./shared/import.js";
+import {
   formatScore,
   formatTime,
   joinMeta,
@@ -84,10 +89,6 @@ function exportCurrentList() {
     status.set("Export needs frames with a valid frame index.", true);
     return;
   }
-  if (limit != null && rows.length < limit) {
-    status.set(`Could only build ${rows.length}/${limit} rows.`, true);
-    return;
-  }
 
   const csv = rows.map(([videoId, frameIdx]) => `${videoId},${frameIdx}`).join("\n") + "\n";
   const filename = downloadTextFile(csv, `${queryId}.csv`);
@@ -108,13 +109,11 @@ function setImportBusy(busy) {
 }
 
 function openImportPicker() {
-  importCsvEl.value = "";
-  importCsvEl.click();
+  openCsvFilePicker(importCsvEl);
 }
 
 async function importSubmissionCsv(file) {
   if (!file) return;
-  const queryId = queryIdFromFilename(file.name);
   setImportBusy(true);
   status.set(`Importing ${file.name}…`);
   try {
@@ -122,32 +121,26 @@ async function importSubmissionCsv(file) {
     if (!csvText.trim()) {
       throw new Error("CSV file is empty.");
     }
-    const response = await fetch("/api/submission/frames", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ csv_text: csvText, query_id: queryId }),
-    });
-    if (!response.ok) {
-      let detail = `Import failed (${response.status})`;
-      try {
-        const errBody = await response.json();
-        if (errBody?.detail) {
-          detail =
-            typeof errBody.detail === "string"
-              ? errBody.detail
-              : JSON.stringify(errBody.detail);
-        }
-      } catch {
-        /* keep default */
-      }
-      throw new Error(detail);
+    const queryId = queryIdFromFilename(file.name);
+    const framePayload = await resolveSubmissionFrames({ csvText, queryId });
+
+    const query = await fetchQueryText(queryId);
+    if (query && !queryEl.value.trim()) {
+      queryEl.value = query;
     }
-    const payload = await response.json();
+
     exportQueryIdEl.value = queryId;
-    renderHits(payload);
-    const errCount = (payload.errors || []).length;
-    const resolved = payload.resolved ?? (payload.hits || []).length;
-    const total = payload.total_rows ?? resolved;
+    renderHits({
+      ...framePayload,
+      mode: "csv",
+      query_id: queryId,
+      plan: null,
+      chains: [],
+    });
+
+    const errCount = (framePayload.errors || []).length;
+    const resolved = framePayload.resolved ?? (framePayload.hits || []).length;
+    const total = framePayload.total_rows ?? resolved;
     if (!resolved) {
       status.set(
         errCount
@@ -481,12 +474,16 @@ function renderResultGrid() {
 function renderHits(payload) {
   lastPlan = payload.plan || null;
   lastChains = payload.chains || [];
-  resultHits = (payload.hits || []).map(withHitId);
+  resultHits = (payload.hits || []).map((hit) =>
+    hit._uid ? hit : withHitId(hit)
+  );
 
   if (!resultHits.length && !lastChains.length) {
     resultsEl.hidden = true;
     planEl.hidden = true;
-    if ((payload.mode || "") !== "csv") {
+    chainsEl.replaceChildren();
+    gridEl.replaceChildren();
+    if ((payload.mode || "") !== "csv" && (payload.mode || "") !== "csv_import") {
       status.set("No keyframes matched this query.");
     }
     return;
@@ -496,7 +493,7 @@ function renderHits(payload) {
   renderPlan(lastPlan);
   renderChains(lastChains);
   renderResultGrid();
-  if ((payload.mode || "") !== "csv") {
+  if ((payload.mode || "") !== "csv" && (payload.mode || "") !== "csv_import") {
     const bits = [];
     if (lastChains.length) bits.push(`${lastChains.length} chains`);
     if (resultHits.length) bits.push(`${resultHits.length} frames`);

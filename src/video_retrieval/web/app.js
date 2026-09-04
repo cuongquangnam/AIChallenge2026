@@ -33,11 +33,6 @@ let lastMode = "mixed";
 let resultHits = [];
 let hitSeq = 0;
 
-const PAD_OFFSETS = [
-  1, -1, 2, -2, 3, -3, 5, -5, 8, -8, 12, -12, 15, -15, 20, -20, 25, -25, 30, -30,
-  40, -40, 50, -50,
-];
-
 function setStatus(message, isError = false) {
   statusEl.textContent = message || "";
   statusEl.classList.toggle("error", Boolean(isError));
@@ -80,42 +75,7 @@ function hitsToSubmissionRows(hits, limit) {
     }
   }
 
-  if (limit == null) {
-    return rows;
-  }
-
-  const seeds = [...rows];
-  let offsetI = 0;
-  while (rows.length < limit && seeds.length) {
-    const offset = PAD_OFFSETS[offsetI % PAD_OFFSETS.length];
-    const cycle = Math.floor(offsetI / PAD_OFFSETS.length);
-    const seed = seeds[cycle % seeds.length];
-    const candidate = [seed[0], seed[1] + offset];
-    offsetI += 1;
-    if (candidate[1] < 0) continue;
-    const key = `${candidate[0]}|${candidate[1]}`;
-    if (seen.has(key)) {
-      if (offsetI > limit * 200) break;
-      continue;
-    }
-    seen.add(key);
-    rows.push(candidate);
-  }
-
-  if (rows.length < limit && rows.length) {
-    const last = rows[rows.length - 1];
-    let nxt = last[1] + 1;
-    while (rows.length < limit) {
-      const key = `${last[0]}|${nxt}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        rows.push([last[0], nxt]);
-      }
-      nxt += 1;
-    }
-  }
-
-  return rows.slice(0, limit);
+  return rows;
 }
 
 function exportCurrentList() {
@@ -131,10 +91,6 @@ function exportCurrentList() {
 
   if (!rows.length) {
     setStatus("Export needs frames with a valid frame index.", true);
-    return;
-  }
-  if (limit != null && rows.length < limit) {
-    setStatus(`Could only build ${rows.length}/${limit} rows.`, true);
     return;
   }
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from video_retrieval.models import EventChain, SearchHit
-from video_retrieval.search.kis import hits_to_submission_rows
+from video_retrieval.models import EventChain, EventHit, SearchHit
 
 
 def chains_to_submission_rows(
@@ -20,29 +19,51 @@ def chains_to_submission_rows(
             seen.add(key)
             rows.append(key)
             if len(rows) >= limit:
-                return rows[:limit]
+                return rows
 
-    if len(rows) < limit and rows:
-        seed_hits = [
+    if not rows:
+        raise ValueError("Need at least one chain hit to build submission rows")
+    return rows
+
+
+def chains_to_search_hits(
+    chains: list[EventChain],
+    *,
+    limit: int = 100,
+) -> list[SearchHit]:
+    """Flatten chains to submission rows in chain / event order (E1, E2, …)."""
+    rows = chains_to_submission_rows(chains, limit=limit)
+    lookup: dict[tuple[str, int], tuple[EventChain, EventHit]] = {}
+    for chain in chains:
+        for event in chain.events:
+            lookup[(chain.video_id, int(event.frame_index))] = (chain, event)
+
+    hits: list[SearchHit] = []
+    for chain_index, (video_id, frame_idx) in enumerate(rows):
+        pair = lookup.get((video_id, frame_idx))
+        if pair is None:
+            continue
+        chain, event = pair
+        hits.append(
             SearchHit(
                 video_id=video_id,
-                score=1.0,
-                source="kis_chain",
-                frame_index=frame_idx,
+                score=chain.score - chain_index * 0.01 + event.score * 0.001,
+                source=f"kis:{event.event_id}",
+                frame_index=event.frame_index,
+                timestamp_sec=event.timestamp_sec,
+                text=event.text,
+                keyframe_path=event.keyframe_path,
             )
-            for video_id, frame_idx in rows
-        ]
-        try:
-            return hits_to_submission_rows(seed_hits, limit=limit)
-        except ValueError:
-            return rows[:limit]
-
-    if len(rows) < limit:
-        raise ValueError(f"Need at least one chain hit to build {limit} submission rows")
-    return rows[:limit]
+        )
+    return hits
 
 
-def chains_to_search_hits(chains: list[EventChain]) -> list[SearchHit]:
+def chains_to_flat_event_hits(
+    chains: list[EventChain],
+    *,
+    source_prefix: str = "trake",
+) -> list[SearchHit]:
+    """One hit per chain event in chain rank order (no padding)."""
     hits: list[SearchHit] = []
     for chain_index, chain in enumerate(chains):
         for event in chain.events:
@@ -50,14 +71,13 @@ def chains_to_search_hits(chains: list[EventChain]) -> list[SearchHit]:
                 SearchHit(
                     video_id=chain.video_id,
                     score=chain.score - chain_index * 0.01 + event.score * 0.001,
-                    source=f"kis:{event.event_id}",
+                    source=f"{source_prefix}:{event.event_id}",
                     frame_index=event.frame_index,
                     timestamp_sec=event.timestamp_sec,
                     text=event.text,
                     keyframe_path=event.keyframe_path,
                 )
             )
-    hits.sort(key=lambda item: item.score, reverse=True)
     return hits
 
 
