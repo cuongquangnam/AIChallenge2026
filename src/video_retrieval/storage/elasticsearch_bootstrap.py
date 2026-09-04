@@ -9,6 +9,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from video_retrieval.storage.progress_log import Heartbeat, print_log_heartbeat, tail_text
+
 logger = logging.getLogger(__name__)
 
 ES_VERSION = "8.15.3"
@@ -61,7 +63,8 @@ def ensure_elasticsearch(
     es_home = install_dir / f"elasticsearch-{ES_VERSION}"
     if not (es_home / "bin" / "elasticsearch").is_file():
         print(f"[es] downloading Elasticsearch {ES_VERSION} ...", flush=True)
-        _download_and_extract(install_dir)
+        with Heartbeat("[es]", interval_sec=20.0, message="downloading/extracting Elasticsearch…"):
+            _download_and_extract(install_dir)
         print(f"[es] extracted to {es_home}", flush=True)
 
     policy_path = _apply_colab_cgroup_policy(es_home)
@@ -137,22 +140,23 @@ def ensure_elasticsearch(
             print(f"[es] ready at {url} (pid={proc.pid})", flush=True)
             return
         if proc.poll() is not None:
-            tail = _tail_text(bootstrap_log, max_chars=4000)
+            tail = tail_text(bootstrap_log, max_chars=4000)
             raise RuntimeError(
                 f"Elasticsearch exited early with code {proc.returncode}. "
                 f"Log tail ({bootstrap_log}):\n{tail}"
             )
         now = time.monotonic()
         if now - last_print >= 15.0:
-            print(
-                f"[es] still starting… ({int(deadline - now)}s left) "
-                f"see {bootstrap_log}",
-                flush=True,
+            print_log_heartbeat(
+                "[es]",
+                bootstrap_log,
+                seconds_left=deadline - now,
+                max_chars=1500,
             )
             last_print = now
         time.sleep(1.0)
 
-    tail = _tail_text(bootstrap_log, max_chars=4000)
+    tail = tail_text(bootstrap_log, max_chars=4000)
     raise RuntimeError(
         f"Elasticsearch failed to start at {url} within {startup_timeout_sec:.0f}s. "
         f"Log tail ({bootstrap_log}):\n{tail}"
@@ -210,17 +214,6 @@ def _chown_tree(path: Path, username: str) -> None:
     if not path.exists():
         return
     subprocess.check_call(["chown", "-R", f"{username}:{username}", str(path)])
-
-
-def _tail_text(path: Path, *, max_chars: int) -> str:
-    if not path.is_file():
-        return "(no log file)"
-    try:
-        data = path.read_bytes()
-    except OSError as exc:
-        return f"(could not read log: {exc})"
-    text = data.decode("utf-8", errors="replace")
-    return text[-max_chars:] if len(text) > max_chars else text or "(empty log)"
 
 
 def _download_and_extract(install_dir: Path) -> None:

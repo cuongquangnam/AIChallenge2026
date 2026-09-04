@@ -12,6 +12,8 @@ from pathlib import Path
 
 from qdrant_client import QdrantClient
 
+from video_retrieval.storage.progress_log import Heartbeat, print_log_heartbeat, tail_text
+
 logger = logging.getLogger(__name__)
 
 # Colab needs the musl (static) Linux build: gnu needs glibc ≥ 2.38, Colab is 2.35.
@@ -106,7 +108,8 @@ def ensure_qdrant_server(
             f"[qdrant] downloading Qdrant {QDRANT_VERSION} ({QDRANT_ARTIFACT}) ...",
             flush=True,
         )
-        _download_qdrant_binary(install_dir)
+        with Heartbeat("[qdrant]", interval_sec=20.0, message="downloading/extracting Qdrant…"):
+            _download_qdrant_binary(install_dir)
         if not _binary_is_runnable(binary):
             raise RuntimeError(
                 f"Downloaded Qdrant binary is not runnable on this host ({binary}). "
@@ -163,21 +166,22 @@ def ensure_qdrant_server(
             print(f"[qdrant] ready at {url} (pid={proc.pid})", flush=True)
             return
         if proc.poll() is not None:
-            tail = _tail_text(log_path)
+            tail = tail_text(log_path)
             raise RuntimeError(
                 f"Qdrant exited early with code {proc.returncode}. "
                 f"Log tail ({log_path}):\n{tail}"
             )
         now = time.monotonic()
-        if now - last_print >= 30.0:
-            print(
-                f"[qdrant] still starting… ({int(deadline - now)}s left) see {log_path}",
-                flush=True,
+        if now - last_print >= 15.0:
+            print_log_heartbeat(
+                "[qdrant]",
+                log_path,
+                seconds_left=deadline - now,
             )
             last_print = now
         time.sleep(1.0)
 
-    tail = _tail_text(log_path)
+    tail = tail_text(log_path)
     raise RuntimeError(
         f"Qdrant failed to start at {url} within {startup_timeout_sec:.0f}s. "
         f"Log tail ({log_path}):\n{tail}"
@@ -354,12 +358,17 @@ def recover_qdrant_snapshot(
                 f"(client_timeout={timeout_sec:.0f}s) ...",
                 flush=True,
             )
-        client.recover_snapshot(
-            collection_name=collection,
-            location=location,
-            priority=SnapshotPriority.SNAPSHOT,
-            wait=True,
-        )
+        with Heartbeat(
+            "[qdrant]",
+            interval_sec=20.0,
+            message=f"recovering snapshot into {collection!r}…",
+        ):
+            client.recover_snapshot(
+                collection_name=collection,
+                location=location,
+                priority=SnapshotPriority.SNAPSHOT,
+                wait=True,
+            )
 
     try:
         _do_recover()
@@ -409,8 +418,12 @@ def _wait_for_collection_points(
         except Exception:
             pass
         now = time.monotonic()
-        if progress and now - last_print >= 30.0:
-            print(f"[qdrant] waiting for collection {collection!r} to become readable ...", flush=True)
+        if progress and now - last_print >= 20.0:
+            print(
+                f"[qdrant] waiting for collection {collection!r} "
+                f"({int(deadline - now)}s left) ...",
+                flush=True,
+            )
             last_print = now
         time.sleep(2.0)
     raise RuntimeError(f"Timed out waiting for Qdrant collection {collection!r} after recovery")
@@ -458,17 +471,6 @@ def _download_qdrant_binary(install_dir: Path) -> None:
 
     extracted.chmod(extracted.stat().st_mode | 0o111)
     archive_path.unlink(missing_ok=True)
-
-
-def _tail_text(path: Path, *, max_chars: int = 4000) -> str:
-    if not path.is_file():
-        return "(no log file)"
-    try:
-        data = path.read_bytes()
-    except OSError as exc:
-        return f"(could not read log: {exc})"
-    text = data.decode("utf-8", errors="replace")
-    return text[-max_chars:] if len(text) > max_chars else text or "(empty log)"
 
 
 def embedded_storage_has_collection(storage_path: Path, collection: str) -> bool:
